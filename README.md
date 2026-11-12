@@ -26,7 +26,7 @@ Create a production frontend bundle with `npm run build`. Set production environ
 
 Registration and password login create real accounts in SQLite. Passwords use scrypt hashes. Session tokens are random, stored hashed in SQLite, and sent as HttpOnly, SameSite cookies. Every account has one role; the rider and driver APIs enforce that role on the server.
 
-For Google sign-in, create a Web OAuth client in Google Cloud Console, add `http://localhost:5173` as an Authorized JavaScript origin, then set both `VITE_GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_ID` in `.env` to that client ID. The API verifies the Google ID token before creating a session. Restart the dev server after changing environment values.
+For Google sign-in, create a Web OAuth client in Google Cloud Console, add `http://localhost:5173` as an Authorized JavaScript origin, then set both `VITE_GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_ID` in `.env` to that client ID. The API verifies the Google ID token before creating a session. Restart the dev server after changing environment values. A first-time Google sign-in from either portal's login page automatically creates an account with that portal's role; users don't need to register separately first.
 
 For production, set `NODE_ENV=production`, a random `SESSION_SECRET` of at least 32 characters, `APP_ORIGIN` to the deployed site origin, and `GOOGLE_CLIENT_ID`. Serve the app over HTTPS.
 

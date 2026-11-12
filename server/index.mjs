@@ -25,7 +25,7 @@ app.use(helmet(isProduction ? {
   contentSecurityPolicy: { directives: {
     ...helmet.contentSecurityPolicy.getDefaultDirectives(),
     'script-src': ["'self'", 'https://accounts.google.com/gsi/client'],
-    'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+    'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com', 'https://accounts.google.com/gsi/style'],
     'font-src': ["'self'", 'https://fonts.gstatic.com', 'data:'],
     'frame-src': ["'self'", 'https://accounts.google.com/gsi/'],
     'connect-src': ["'self'", 'https://accounts.google.com/gsi/'],
@@ -131,7 +131,6 @@ app.post('/api/auth/google', authLimiter, async (req, res, next) => {
     if (!user) {
       user = db.prepare('SELECT * FROM users WHERE email = ?').get(identity.email)
       if (user && user.role !== data.role) return res.status(403).json({ error: 'This email belongs to the other Avanti portal.' })
-      if (data.mode === 'login' && !user) return res.status(401).json({ error: 'No account found for this portal. Register first.' })
       if (user?.google_sub && user.google_sub !== identity.subject) return res.status(409).json({ error: 'This email is already linked to another Google account.' })
 
       if (!user) {
@@ -147,6 +146,8 @@ app.post('/api/auth/google', authLimiter, async (req, res, next) => {
   } catch (error) {
     if (error?.code === 'SQLITE_CONSTRAINT_UNIQUE') return res.status(409).json({ error: 'This Google account is already linked to another user.' })
     if (error?.status) return res.status(error.status).json({ error: error.message })
+    console.error('Google sign-in callback failed:', error?.message || error)
+    if (!isProduction) return res.status(500).json({ error: `Google sign-in failed: ${error?.message || 'Unknown server error'}` })
     next(error)
   }
 })
@@ -161,7 +162,7 @@ app.post('/api/auth/logout', requireAuth, (req, res) => {
 
 app.get('/api/rider/account', requireAuth, requireRole('rider'), (req, res) => res.json({ user: publicUser(req.user) }))
 app.get('/api/driver/account', requireAuth, requireRole('driver'), (req, res) => res.json({ user: publicUser(req.user) }))
-app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
+app.get('/api/health', (_req, res) => res.json({ status: 'ok', googleAuthConfigured: Boolean(process.env.GOOGLE_CLIENT_ID) }))
 app.use('/api', (_req, res) => res.status(404).json({ error: 'API route not found.' }))
 
 if (isProduction && existsSync(clientDist)) {
