@@ -29,5 +29,21 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id);
   CREATE INDEX IF NOT EXISTS sessions_expires_at_idx ON sessions(expires_at);
+
+  CREATE TABLE IF NOT EXISTS rides (
+    id TEXT PRIMARY KEY,
+    rider_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    driver_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    pickup TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    vehicle TEXT NOT NULL CHECK (vehicle IN ('Mini', 'Sedan', 'SUV')),
+    status TEXT NOT NULL DEFAULT 'requested' CHECK (status IN ('requested', 'accepted', 'declined', 'cancelled')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS rides_status_created_idx ON rides(status, created_at DESC);
+  CREATE INDEX IF NOT EXISTS rides_rider_created_idx ON rides(rider_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS rides_driver_status_idx ON rides(driver_id, status);
 `)
 db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(Date.now())
