@@ -224,8 +224,44 @@
 }
 
 .location-fields {
+  position: relative;
+  z-index: 5;
   padding-left: 21px;
 }
+
+.destination-field-wrap { position: relative; }
+.destination-suggestions {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% - 5px);
+  left: 0;
+  right: 0;
+  max-height: min(260px, 45vh);
+  overflow-y: auto;
+  border: 1px solid #e4e9e1;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 14px 32px rgba(25, 38, 28, .16);
+}
+.destination-suggestion {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 0;
+  border-bottom: 1px solid #eef1eb;
+  color: #29362c;
+  background: #fff;
+  text-align: left;
+  font-size: 11px;
+  cursor: pointer;
+}
+.destination-suggestion:hover, .destination-suggestion:focus-visible { background: #f3f7ef; }
+.destination-suggestion svg { flex: none; color: #6d8761; }
+.destination-search-status, .destination-search-error { margin: 0; padding: 12px; color: #758071; font-size: 10px; line-height: 1.5; }
+.destination-search-error { color: #9a5144; }
 
 .location-field {
   height: 53px;
@@ -234,6 +270,36 @@
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.92);
 }
+
+.pickup-location-wrap { position: relative; }
+.pickup-location-field input { padding-right: 116px; }
+.pickup-current-location {
+  position: absolute;
+  z-index: 1;
+  top: 5px;
+  right: 6px;
+  display: inline-flex;
+  min-width: 105px;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 1px solid #e1e8dc;
+  border-radius: 10px;
+  color: #476443;
+  background: #f8fbf5;
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+.pickup-current-location:hover:not(:disabled) { border-color: #b9cda7; background: #eff6e8; }
+.pickup-current-location:disabled { opacity: .65; cursor: wait; }
+.location-feedback { margin: -1px 0 8px; color: #57724e; font-size: 9px; line-height: 1.5; }
+.location-feedback.is-error { color: #9a5144; }
+.pickup-coordinate-note { margin: -4px 0 8px; color: #859083; font-size: 8px; font-variant-numeric: tabular-nums; }
 
 .location-field:focus-within {
   border-color: #8eae66;
@@ -665,11 +731,16 @@
   }
 
   .rider-booking-stack {
-    grid-template-rows: auto auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 300px auto auto;
+    gap: 12px;
   }
 
-  .map-stage {
+  .rider-dashboard .map-stage {
+    grid-area: 1 / 1;
+    width: 100%;
     height: 300px;
+    min-height: 260px;
     border-radius: 21px;
   }
 
@@ -684,10 +755,11 @@
   }
 
   .booking-panel {
-    align-self: end;
-    justify-self: center;
-    width: calc(100% - 18px);
-    margin: 0 0 -36px;
+    grid-area: 2 / 1;
+    align-self: stretch;
+    justify-self: stretch;
+    width: 100%;
+    margin: 0;
     padding: 18px 14px 15px;
     border-radius: 19px;
     background: rgba(255, 255, 255, 0.94);
@@ -745,8 +817,8 @@
   }
 
   .vehicle-panel {
-    grid-area: 2 / 1;
-    margin-top: 51px;
+    grid-area: 3 / 1;
+    margin-top: 0;
     padding: 17px 13px 14px;
     border-radius: 19px;
   }

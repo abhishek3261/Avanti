@@ -1,0 +1,73 @@
+.google-map-stage {
+  position: relative;
+  background: #e6e9e2;
+}
+
+.google-map-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.google-map-message {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  padding: 24px;
+  color: #5c695b;
+  background: rgba(242, 245, 239, .94);
+  text-align: center;
+  backdrop-filter: blur(10px);
+}
+
+.google-map-message b {
+  color: #29362b;
+  font-size: 14px;
+}
+
+.google-map-message > span:not(.map-loading-spinner) {
+  max-width: 360px;
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.google-map-error button {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  color: #17200e;
+  background: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 160ms ease, transform 160ms ease;
+}
+
+.google-map-error button:hover { background: var(--accent-strong); transform: translateY(-1px); }
+
+.map-loading-spinner {
+  width: 27px;
+  height: 27px;
+  border: 2px solid #d7e0d1;
+  border-top-color: #54724a;
+  border-radius: 50%;
+  animation: map-spin 750ms linear infinite;
+}
+
+.google-map-disclaimer {
+  z-index: 1;
+  pointer-events: none;
+}
+
+@keyframes map-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .map-loading-spinner { animation: none; }
+}

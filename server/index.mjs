@@ -24,11 +24,13 @@ app.use(helmet(isProduction ? {
   crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
   contentSecurityPolicy: { directives: {
     ...helmet.contentSecurityPolicy.getDefaultDirectives(),
-    'script-src': ["'self'", 'https://accounts.google.com/gsi/client'],
-    'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com', 'https://accounts.google.com/gsi/style'],
-    'font-src': ["'self'", 'https://fonts.gstatic.com', 'data:'],
-    'frame-src': ["'self'", 'https://accounts.google.com/gsi/'],
-    'connect-src': ["'self'", 'https://accounts.google.com/gsi/'],
+    'script-src': ["'self'", "'unsafe-inline'", "'unsafe-eval'", 'https://accounts.google.com/gsi/client', 'https://*.googleapis.com', 'https://*.gstatic.com', 'https://*.google.com', 'https://*.ggpht.com', 'https://*.googleusercontent.com', 'blob:'],
+    'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com', 'https://accounts.google.com/gsi/style', 'https://*.googleapis.com'],
+    'font-src': ["'self'", 'https://fonts.gstatic.com', 'https://*.gstatic.com', 'data:'],
+    'img-src': ["'self'", 'https://*.googleapis.com', 'https://*.gstatic.com', 'https://*.google.com', 'https://*.googleusercontent.com', 'data:', 'blob:'],
+    'frame-src': ["'self'", 'https://accounts.google.com/gsi/', 'https://*.google.com'],
+    'connect-src': ["'self'", 'https://accounts.google.com/gsi/', 'https://*.googleapis.com', 'https://*.gstatic.com', 'https://*.google.com', 'data:', 'blob:'],
+    'worker-src': ["'self'", 'blob:'],
   } },
 } : { contentSecurityPolicy: false }))
 app.use(express.json({ limit: '20kb' }))

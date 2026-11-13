@@ -12,6 +12,16 @@ npm run dev
 
 Vite runs the web app at `http://localhost:5173`; the API runs at `http://localhost:4000` and the Vite server proxies `/api` calls to it. The local SQLite file is created at `data/avanti.sqlite` on the first API start.
 
+### Open the development app on a phone over Wi-Fi
+
+1. Connect the phone and laptop to the same Wi-Fi network.
+2. On Windows, run `ipconfig` and find the laptop's IPv4 address under the active Wi-Fi adapter.
+3. Set `APP_ORIGIN` in the local, Git-ignored `.env` to `http://<laptop-ip>:5173` (for example, `http://192.168.1.40:5173`).
+4. Restart the development server with `npm run dev`.
+5. Open `http://<laptop-ip>:5173` on the phone. The API remains behind Vite's `/api` proxy on the laptop.
+
+If Windows Firewall prompts, allow Node.js/Vite on the **Private** network. For Google Maps, add the phone-access origin to the Maps browser key's website restrictions. Browser GPS requires a secure context: a phone opening the LAN URL over plain HTTP may be blocked from location access. Use a trusted HTTPS development tunnel or install/trust a local development certificate on the phone for GPS. Google Sign-In may reject a raw LAN IP as an OAuth JavaScript origin; use an HTTPS development URL if Google login is needed on the phone.
+
 Create a production frontend bundle with `npm run build`. Set production environment values, then `npm start` runs the API and serves the built app.
 
 ## Pages
