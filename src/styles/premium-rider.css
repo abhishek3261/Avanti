@@ -3,11 +3,16 @@
 }
 
 .rider-app {
+  width: 100%;
+  min-width: 0;
   max-width: 1480px;
+  margin-inline: auto;
   padding: 43px clamp(18px, 5vw, 72px) 30px;
 }
 
 .dashboard-topline {
+  grid-column: 1 / -1;
+  grid-row: 1;
   align-items: center;
   margin-bottom: 27px;
 }
@@ -75,21 +80,27 @@
 }
 
 .rider-grid {
-  grid-template-columns: minmax(0, 1fr) 292px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 350px);
   align-items: start;
   gap: 22px;
+  width: 100%;
+  min-width: 0;
 }
 
-.rider-booking-stack {
-  display: grid;
+.rider-grid > * {
   min-width: 0;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto;
+}
+
+.rider-map-column {
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
 }
 
 .map-stage {
-  grid-area: 1 / 1;
-  height: 500px;
+  height: clamp(470px, 66vh, 680px);
+  min-height: 440px;
   margin: 0;
   overflow: hidden;
   border: 1px solid rgba(235, 242, 229, 0.5);
@@ -113,6 +124,17 @@
   color: #789c89;
   font-size: 8px;
 }
+
+.avanti-route-pin {
+  display: block;
+  width: 19px;
+  height: 19px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 2px 10px rgba(22, 36, 25, .38);
+}
+.avanti-route-pin-pickup { background: #c8f36b; }
+.avanti-route-pin-destination { border-radius: 5px; background: #315340; transform: rotate(45deg); }
 
 .map-place {
   padding: 5px 8px;
@@ -187,12 +209,13 @@
 }
 
 .booking-panel {
-  z-index: 3;
-  grid-area: 1 / 1;
+  grid-column: 2;
+  grid-row: 2;
   align-self: start;
-  justify-self: end;
-  width: min(440px, 48%);
-  margin: 30px 30px 0 0;
+  position: sticky;
+  top: 98px;
+  width: 100%;
+  margin: 0;
   padding: 23px;
   border-color: rgba(255, 255, 255, 0.85);
   border-radius: 23px;
@@ -272,6 +295,7 @@
 }
 
 .pickup-location-wrap { position: relative; }
+.pickup-field-wrap { position: relative; }
 .pickup-location-field input { padding-right: 116px; }
 .pickup-current-location {
   position: absolute;
@@ -300,6 +324,45 @@
 .location-feedback { margin: -1px 0 8px; color: #57724e; font-size: 9px; line-height: 1.5; }
 .location-feedback.is-error { color: #9a5144; }
 .pickup-coordinate-note { margin: -4px 0 8px; color: #859083; font-size: 8px; font-variant-numeric: tabular-nums; }
+.route-state, .route-error { margin: 8px 0; font-size: 10px; line-height: 1.5; }
+.route-state { color: #64755f; }
+.route-error { color: #9a5144; overflow-wrap: anywhere; }
+.route-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 12px;
+}
+.route-summary > span {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid #e5eadf;
+  border-radius: 999px;
+  color: #425d43;
+  background: #f6f9f2;
+  font-size: 10px;
+  font-weight: 700;
+}
+.route-summary svg { color: #6a875a; }
+.fare-breakdown {
+  margin: 14px 0 2px;
+  padding: 13px 14px;
+  border: 1px solid #e7ebe3;
+  border-radius: 14px;
+  background: #fbfcf9;
+}
+.fare-breakdown-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.fare-breakdown-heading > div { display: grid; gap: 3px; }
+.fare-breakdown-heading b { color: #263329; font-size: 11px; }
+.fare-breakdown-heading small { color: #858d82; font-size: 8px; }
+.fare-breakdown-heading strong { color: #253a2b; font-size: 17px; white-space: nowrap; }
+.fare-breakdown dl { display: grid; gap: 7px; margin: 12px 0 0; padding-top: 10px; border-top: 1px solid #e9ede6; }
+.fare-breakdown dl > div { display: flex; justify-content: space-between; gap: 10px; color: #747e73; font-size: 9px; }
+.fare-breakdown dt { min-width: 0; }
+.fare-breakdown dd { margin: 0; color: #354539; font-weight: 700; white-space: nowrap; }
 
 .location-field:focus-within {
   border-color: #8eae66;
@@ -419,7 +482,8 @@
 }
 
 .vehicle-panel {
-  grid-area: 2 / 1;
+  grid-column: 1;
+  grid-row: 3;
   margin-top: 19px;
   padding: 21px;
   border: 1px solid #e4e9e1;
@@ -553,6 +617,8 @@
 .ride-error { margin: 9px 0; padding: 10px 12px; border: 1px solid #efd9d4; border-radius: 10px; color: #85483e; background: #fbf1ef; font-size: 10px; line-height: 1.5; }
 
 .rider-side {
+  grid-column: 2;
+  grid-row: 3;
   gap: 13px;
 }
 
@@ -656,18 +722,12 @@
 
 @media (max-width: 900px) {
   .rider-grid {
-    grid-template-columns: minmax(0, 1fr) 250px;
-    gap: 15px;
+    grid-template-columns: minmax(0, 1fr) minmax(270px, 320px);
+    gap: 16px;
   }
 
   .map-stage {
-    height: 470px;
-  }
-
-  .booking-panel {
-    width: min(390px, 53%);
-    margin: 24px 20px 0 0;
-    padding: 19px;
+    height: clamp(430px, 62vh, 560px);
   }
 
   .vehicle-panel {
@@ -689,9 +749,9 @@
   }
 }
 
-@media (max-width: 680px) {
+@media (max-width: 767px) {
   .rider-app {
-    padding: 26px 14px calc(92px + env(safe-area-inset-bottom));
+    padding: 20px 14px calc(104px + env(safe-area-inset-bottom));
   }
 
   .dashboard-topline {
@@ -726,21 +786,30 @@
   }
 
   .rider-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 15px;
   }
 
-  .rider-booking-stack {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 300px auto auto;
-    gap: 12px;
+  /* Reset desktop placements so Grid cannot create an implicit second column. */
+  .rider-map-column,
+  .booking-panel,
+  .vehicle-panel,
+  .rider-side {
+    grid-column: 1;
+    min-width: 0;
+  }
+
+  .rider-map-column { grid-row: 1; }
+  .dashboard-topline {
+    grid-column: 1;
+    grid-row: 4;
+    margin: 0;
   }
 
   .rider-dashboard .map-stage {
-    grid-area: 1 / 1;
     width: 100%;
-    height: 300px;
-    min-height: 260px;
+    height: clamp(280px, 40svh, 340px);
+    min-height: 280px;
     border-radius: 21px;
   }
 
@@ -755,7 +824,9 @@
   }
 
   .booking-panel {
-    grid-area: 2 / 1;
+    grid-row: 2;
+    position: relative;
+    top: auto;
     align-self: stretch;
     justify-self: stretch;
     width: 100%;
@@ -775,6 +846,25 @@
 
   .location-field {
     height: 48px;
+  }
+
+  .pickup-location-field input {
+    padding-right: 12px;
+  }
+
+  .pickup-location-wrap {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .pickup-current-location {
+    position: static;
+    align-self: flex-end;
+    min-width: 0;
+    min-height: 38px;
+    margin: 0 0 6px;
   }
 
   .recent-destinations {
@@ -817,7 +907,7 @@
   }
 
   .vehicle-panel {
-    grid-area: 3 / 1;
+    grid-row: 3;
     margin-top: 0;
     padding: 17px 13px 14px;
     border-radius: 19px;
@@ -832,23 +922,47 @@
   }
 
   .vehicle-card {
-    min-height: 68px;
-    gap: 8px;
-    padding: 9px;
+    min-height: 76px;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 11px;
+    padding: 12px;
     border-radius: 12px;
   }
 
+  .vehicle-icon {
+    flex: 0 0 40px;
+    width: 40px;
+    height: 40px;
+  }
+
+  .vehicle-info {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
   .vehicle-info > b {
-    font-size: 10px;
+    font-size: 13px;
   }
 
   .vehicle-info > small {
-    margin: 2px 0 3px;
-    font-size: 7px;
+    margin: 3px 0 5px;
+    font-size: 11px;
+    line-height: 1.35;
   }
 
   .vehicle-meta {
-    font-size: 6px;
+    font-size: 10px;
+  }
+
+  .vehicle-price {
+    flex: 0 0 auto;
+    font-size: 13px;
+    text-align: right;
+  }
+
+  .vehicle-price small {
+    font-size: 9px;
   }
 
   .vehicle-price {
@@ -861,13 +975,14 @@
   }
 
   .rider-side {
+    grid-row: 5;
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 8px;
   }
 
   .side-greeting {
-    grid-row: span 2;
+    grid-row: auto;
     min-height: 164px;
     padding: 15px;
     border-radius: 17px;
@@ -910,12 +1025,12 @@
   }
 
   .side-driver {
-    grid-column: 1 / -1;
+    grid-column: 1;
     padding: 10px;
   }
 
   .switch-portal {
-    grid-column: 1 / -1;
+    grid-column: 1;
     padding: 4px 2px;
   }
 

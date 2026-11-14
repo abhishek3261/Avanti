@@ -14,11 +14,51 @@ export type GoogleMapOptions = {
 export type GoogleMapInstance = {
   setCenter: (center: MapsPoint) => void
   setZoom: (zoom: number) => void
+  fitBounds: (bounds: unknown, padding?: number) => void
+}
+
+export type MapsCoreLibrary = {
+  LatLngBounds: new () => { extend: (point: MapsPoint) => void }
 }
 
 export type GoogleGeocoder = {
-  geocode: (request: { location: MapsPoint }) => Promise<{ results: Array<{ formatted_address: string }> }>
+  geocode: (request: { location?: MapsPoint; address?: string }) => Promise<{ results: Array<{ formatted_address: string; geometry: { location: { lat: () => number; lng: () => number } } }> }>
 }
+
+export type GoogleRoute = {
+  distanceMeters?: number
+  durationMillis?: number
+  path?: unknown[]
+  createPolylines: () => GooglePolyline[]
+}
+
+export type GooglePolyline = {
+  setMap: (map: GoogleMapInstance | null) => void
+}
+
+export type GooglePolylineOptions = {
+  map: GoogleMapInstance
+  path: unknown[]
+  strokeColor: string
+  strokeOpacity: number
+  strokeWeight: number
+  geodesic: boolean
+  zIndex: number
+}
+
+export type RoutesLibrary = {
+  Route: {
+    computeRoutes: (request: {
+      origin: MapsPoint
+      destination: MapsPoint
+      travelMode: 'DRIVING'
+      routingPreference: 'TRAFFIC_AWARE'
+      fields: string[]
+    }) => Promise<{ routes?: GoogleRoute[] }>
+  }
+}
+
+export type DrivingRoute = { distanceMeters: number; durationMillis: number; path: unknown[] }
 
 export type PlaceAutocompletePrediction = {
   text: { toString: () => string }
@@ -44,6 +84,7 @@ export type PlacesLibrary = {
 export type MapsLibrary = {
   Map: new (element: HTMLElement, options: GoogleMapOptions) => GoogleMapInstance
   Geocoder: new () => GoogleGeocoder
+  Polyline: new (options: GooglePolylineOptions) => GooglePolyline
 }
 
 export type AdvancedMarkerInstance = {
@@ -52,10 +93,10 @@ export type AdvancedMarkerInstance = {
 }
 
 export type MarkerLibrary = {
-  AdvancedMarkerElement: new (options: { map: GoogleMapInstance; position: MapsPoint; title: string }) => AdvancedMarkerInstance
+  AdvancedMarkerElement: new (options: { map: GoogleMapInstance; position: MapsPoint; title: string; content?: HTMLElement }) => AdvancedMarkerInstance
 }
 
-export type GoogleMapsLibraries = { maps: MapsLibrary; marker: MarkerLibrary; places: PlacesLibrary }
+export type GoogleMapsLibraries = { core: MapsCoreLibrary; maps: MapsLibrary; marker: MarkerLibrary; places: PlacesLibrary }
 
 type ImportLibrary = (libraryName: string) => Promise<unknown>
 type MapsNamespace = {
@@ -67,6 +108,8 @@ type MapsWindow = { google?: { maps?: MapsNamespace } }
 
 let requestedApiKey: string | undefined
 let librariesPromise: Promise<GoogleMapsLibraries> | undefined
+let routesLibraryPromise: Promise<RoutesLibrary> | undefined
+const activeRouteRequests = new Map<string, Promise<DrivingRoute>>()
 
 function installImportLibraryBootstrap(apiKey: string): MapsNamespace {
   const mapsWindow = window as unknown as MapsWindow
@@ -125,15 +168,58 @@ export function loadGoogleMaps(): Promise<GoogleMapsLibraries> {
   if (!librariesPromise) {
     const mapsNamespace = installImportLibraryBootstrap(apiKey)
     librariesPromise = Promise.all([
+      mapsNamespace.importLibrary!('core'),
       mapsNamespace.importLibrary!('maps'),
       mapsNamespace.importLibrary!('marker'),
       mapsNamespace.importLibrary!('places'),
     ])
-      .then(([maps, marker, places]) => ({ maps: maps as MapsLibrary, marker: marker as MarkerLibrary, places: places as PlacesLibrary }))
+      .then(([core, maps, marker, places]) => ({ core: core as MapsCoreLibrary, maps: maps as MapsLibrary, marker: marker as MarkerLibrary, places: places as PlacesLibrary }))
       .catch(error => {
         librariesPromise = undefined
         throw error
       })
   }
   return librariesPromise
+}
+
+function loadRoutesLibrary(): Promise<RoutesLibrary> {
+  return loadGoogleMaps().then(() => {
+    const mapsNamespace = (window as unknown as MapsWindow).google?.maps
+    if (!mapsNamespace?.importLibrary) throw new Error('Google Maps Routes library is unavailable.')
+    routesLibraryPromise ??= mapsNamespace.importLibrary('routes')
+      .then(library => library as RoutesLibrary)
+      .catch(error => {
+        routesLibraryPromise = undefined
+        throw error
+      })
+    return routesLibraryPromise
+  })
+}
+
+export function calculateDrivingRoute(origin: MapsPoint, destination: MapsPoint): Promise<DrivingRoute> {
+  const key = `${origin.lat},${origin.lng}:${destination.lat},${destination.lng}`
+  const existing = activeRouteRequests.get(key)
+  if (existing) return existing
+
+  const request = loadRoutesLibrary().then(async routes => {
+    const response = await routes.Route.computeRoutes({
+      origin,
+      destination,
+      travelMode: 'DRIVING',
+      routingPreference: 'TRAFFIC_AWARE',
+      fields: ['distanceMeters', 'durationMillis', 'path'],
+    })
+    const route = response.routes?.[0]
+    if (!route) throw new Error('Google Maps could not find a driving route between these locations.')
+    if (!Number.isFinite(route.distanceMeters) || !Number.isFinite(route.durationMillis) || !route.path?.length) {
+      throw new Error('Google Maps returned incomplete route details. Please try different locations.')
+    }
+    return { distanceMeters: route.distanceMeters!, durationMillis: route.durationMillis!, path: route.path }
+  })
+  activeRouteRequests.set(key, request)
+  void request.then(
+    () => { if (activeRouteRequests.get(key) === request) activeRouteRequests.delete(key) },
+    () => { if (activeRouteRequests.get(key) === request) activeRouteRequests.delete(key) },
+  )
+  return request
 }

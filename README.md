@@ -12,6 +12,10 @@ npm run dev
 
 Vite runs the web app at `http://localhost:5173`; the API runs at `http://localhost:4000` and the Vite server proxies `/api` calls to it. The local SQLite file is created at `data/avanti.sqlite` on the first API start.
 
+### Google Maps setup
+
+Set `VITE_GOOGLE_MAPS_API_KEY` in `.env`, then restart Vite. Enable billing and the Maps JavaScript API, Places API (New), Routes API, and Geocoding API in the same Google Cloud project. Restrict the browser key by website referrer and allow the local `localhost:5173` origin plus the laptop LAN origin when testing from a phone. The key is used by browser Maps APIs, so protect it with those restrictions; do not put a server key in a `VITE_` variable.
+
 ### Open the development app on a phone over Wi-Fi
 
 1. Connect the phone and laptop to the same Wi-Fi network.
@@ -20,7 +24,62 @@ Vite runs the web app at `http://localhost:5173`; the API runs at `http://localh
 4. Restart the development server with `npm run dev`.
 5. Open `http://<laptop-ip>:5173` on the phone. The API remains behind Vite's `/api` proxy on the laptop.
 
-If Windows Firewall prompts, allow Node.js/Vite on the **Private** network. For Google Maps, add the phone-access origin to the Maps browser key's website restrictions. Browser GPS requires a secure context: a phone opening the LAN URL over plain HTTP may be blocked from location access. Use a trusted HTTPS development tunnel or install/trust a local development certificate on the phone for GPS. Google Sign-In may reject a raw LAN IP as an OAuth JavaScript origin; use an HTTPS development URL if Google login is needed on the phone.
+If Windows Firewall prompts, allow Node.js/Vite on the **Private** network. The plain HTTP LAN URL is useful for layout checks, but iPhone browsers require a secure HTTPS page for GPS. Use the temporary HTTPS tunnel below when testing location.
+
+### Temporary HTTPS tunnel for iPhone GPS
+
+Cloudflare Quick Tunnels give the local Vite app a temporary HTTPS URL without changing the Maps key or adding a tunnel secret to the project. Anyone who has the generated URL can reach the development app, so use test accounts and data only. The URL stops working when the tunnel process exits and changes when a new tunnel is started. [Cloudflare Quick Tunnel documentation](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)
+
+1. Install `cloudflared` once from PowerShell:
+
+   ```powershell
+   winget install --id Cloudflare.cloudflared
+   ```
+
+   Open a new PowerShell window after installation if `cloudflared` is not found.
+
+2. Stop any existing Avanti dev processes with **Ctrl+C** so ports 5173 and 4000 are free.
+
+3. In PowerShell terminal 1, start the temporary tunnel:
+
+   ```powershell
+   cloudflared tunnel --url http://localhost:5173
+   ```
+
+   Keep this terminal open. Copy the generated URL, for example `https://random-words.trycloudflare.com`.
+
+4. Add the exact HTTPS origin to `APP_ORIGIN` in your Git-ignored `.env`, keeping any origins you still use separated by commas. For the current tunnel and laptop LAN address, set:
+
+   ```dotenv
+   APP_ORIGIN=http://192.168.1.40:5173,https://days-meets-imaging-shoppers.trycloudflare.com
+   ```
+
+   Edit the `.env` line without quotes. If the tunnel hostname changes, replace the HTTPS origin with the new one. The API allows only the exact listed origins. Keep `TRUST_PROXY=loopback` in `.env`; API requests arrive through the local Vite proxy, and this lets rate limiting use forwarded client addresses without trusting arbitrary network hosts.
+
+5. Add the tunnel hostname (without `https://`) to `AVANTI_VITE_ALLOWED_HOSTS` in `.env`, then start both services:
+
+   ```powershell
+   AVANTI_VITE_ALLOWED_HOSTS=days-meets-imaging-shoppers.trycloudflare.com
+   ```
+
+   Then run:
+
+   ```powershell
+   npm.cmd run dev
+   ```
+
+   `npm.cmd run dev` starts both services. `AVANTI_VITE_ALLOWED_HOSTS` allows only the active tunnel hostname. Vite's existing `/api` proxy forwards requests to the API on port 4000. Restart both services after changing the tunnel hostname. [Vite server options](https://vite.dev/config/server-options#server-allowedhosts)
+
+6. In Google Cloud Console, update the existing credentials:
+
+   - OAuth 2.0 Web client: add `https://days-meets-imaging-shoppers.trycloudflare.com` under **Authorized JavaScript origins**.
+   - Maps browser API key: add `https://days-meets-imaging-shoppers.trycloudflare.com/*` under website referrers. Confirm billing is enabled, **Routes API** is enabled in the same project, and the key's API restrictions permit Routes API as well as the Maps, Places, and Geocoding APIs used by the app.
+
+   Update both entries if Cloudflare gives you a different hostname.
+
+6. On the iPhone, open the generated **HTTPS** URL in Safari, sign in, open the rider dashboard, and tap **My location**. When Safari asks, allow location access while using the site. If permission was denied earlier, use Safari's **aA → Website Settings → Location → Allow**, then reload the page. The iOS Location Services setting for Safari Websites must also be enabled.
+
+Stop the app and tunnel with **Ctrl+C** in their respective terminals. The `.env` file is local and Git-ignored; it contains origins only, not API credentials.
 
 Create a production frontend bundle with `npm run build`. Set production environment values, then `npm start` runs the API and serves the built app.
 
@@ -28,7 +87,7 @@ Create a production frontend bundle with `npm run build`. Set production environ
 
 - `/` - Avanti landing page
 - `/rider/login` and `/rider/register` - rider login and registration
-- `/rider/dashboard` - rider booking preview with sample vehicle categories and fares (rider account required)
+- `/rider/dashboard` - rider booking with Google driving-route previews and configurable sample fare estimates (rider account required)
 - `/driver/login` and `/driver/register` - driver login and registration
 - `/driver/dashboard` - driver dashboard with sample ride requests and earnings (driver account required)
 
@@ -58,4 +117,4 @@ server/
 data/           local SQLite database (created on first API start)
 ```
 
-The cab booking, maps, ride requests, and earnings remain sample UI and are not connected to the backend.
+The rider dashboard calculates real Google Maps driving routes and displays configurable sample fare estimates. Fare rates are in `src/lib/fares.ts`. Ride requests continue to use the existing backend contract; fares are estimates and are not stored or charged. Driver earnings and ride history remain sample UI.

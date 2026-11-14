@@ -19,7 +19,10 @@ if (isProduction && (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.l
 }
 
 app.disable('x-powered-by')
-if (process.env.TRUST_PROXY) app.set('trust proxy', Number(process.env.TRUST_PROXY))
+if (process.env.TRUST_PROXY) {
+  const trustProxy = process.env.TRUST_PROXY.trim()
+  app.set('trust proxy', /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy)
+}
 app.use(helmet(isProduction ? {
   crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
   contentSecurityPolicy: { directives: {
@@ -35,11 +38,15 @@ app.use(helmet(isProduction ? {
 } : { contentSecurityPolicy: false }))
 app.use(express.json({ limit: '20kb' }))
 
+const configuredOrigins = (process.env.APP_ORIGIN || '')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean)
 const allowedOrigins = new Set([
-  process.env.APP_ORIGIN,
+  ...configuredOrigins,
   'http://localhost:5173',
   'http://127.0.0.1:5173',
-].filter(Boolean))
+])
 
 app.use('/api', (req, res, next) => {
   res.setHeader('Cache-Control', 'no-store')

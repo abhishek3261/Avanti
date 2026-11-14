@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { loadGoogleMaps, type AdvancedMarkerInstance, type GoogleMapInstance, type MapsPoint, type MarkerLibrary } from '../../lib/googleMaps'
+import { loadGoogleMaps, type AdvancedMarkerInstance, type DrivingRoute, type GoogleMapInstance, type MapsCoreLibrary, type MapsLibrary, type MapsPoint, type MarkerLibrary, type GooglePolyline } from '../../lib/googleMaps'
 
 type MapState = 'loading' | 'ready' | 'error'
 type MapsAuthWindow = Window & { gm_authFailure?: () => void }
@@ -7,18 +7,66 @@ type MapsAuthWindow = Window & { gm_authFailure?: () => void }
 export type GoogleMapViewHandle = {
   showCurrentLocation: (point: MapsPoint) => void
   clearCurrentLocation: () => void
+  showRoute: (route: DrivingRoute, origin: MapsPoint, destination: MapsPoint) => void
+  clearRoute: () => void
 }
 
 const GoogleMapView = forwardRef<GoogleMapViewHandle>(function GoogleMapView(_props, ref) {
   const mapElement = useRef<HTMLDivElement>(null)
   const mapInstance = useRef<GoogleMapInstance | null>(null)
+  const coreLibrary = useRef<MapsCoreLibrary | null>(null)
   const AdvancedMarker = useRef<MarkerLibrary['AdvancedMarkerElement'] | null>(null)
+  const mapsLibrary = useRef<MapsLibrary | null>(null)
   const locationMarker = useRef<AdvancedMarkerInstance | null>(null)
+  const routeMarkers = useRef<AdvancedMarkerInstance[]>([])
+  const routePolylines = useRef<GooglePolyline[]>([])
+  const currentRoute = useRef<{ route: DrivingRoute; origin: MapsPoint; destination: MapsPoint } | null>(null)
   const currentLocation = useRef<MapsPoint | null>(null)
   const [state, setState] = useState<MapState>('loading')
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
   const hasApiKey = Boolean(import.meta.env.VITE_GOOGLE_MAPS_API_KEY?.trim())
+
+  const clearRoute = () => {
+    currentRoute.current = null
+    routePolylines.current.forEach(polyline => polyline.setMap(null))
+    routePolylines.current = []
+    routeMarkers.current.forEach(marker => { marker.map = null })
+    routeMarkers.current = []
+  }
+
+  const drawRoute = (route: DrivingRoute, origin: MapsPoint, destination: MapsPoint) => {
+    currentRoute.current = { route, origin, destination }
+    const map = mapInstance.current
+    const maps = mapsLibrary.current
+    const Marker = AdvancedMarker.current
+    const core = coreLibrary.current
+    if (!map || !maps || !core || !Marker) return
+    routePolylines.current.forEach(polyline => polyline.setMap(null))
+    routeMarkers.current.forEach(marker => { marker.map = null })
+    routePolylines.current = [new maps.Polyline({ map, path: route.path, strokeColor: '#315340', strokeOpacity: 0.92, strokeWeight: 6, geodesic: true, zIndex: 2 })]
+    const createPin = (kind: 'pickup' | 'destination') => {
+      const pin = document.createElement('span')
+      pin.className = `avanti-route-pin avanti-route-pin-${kind}`
+      pin.setAttribute('aria-hidden', 'true')
+      return pin
+    }
+    routeMarkers.current = [
+      new Marker({ map, position: origin, title: 'Pickup location', content: createPin('pickup') }),
+      new Marker({ map, position: destination, title: 'Destination', content: createPin('destination') }),
+    ]
+    const bounds = new core.LatLngBounds()
+    bounds.extend(origin)
+    bounds.extend(destination)
+    for (const value of route.path) {
+      if (!value || typeof value !== 'object') continue
+      const candidate = value as { lat?: number | (() => number); lng?: number | (() => number) }
+      const lat = typeof candidate.lat === 'function' ? candidate.lat() : candidate.lat
+      const lng = typeof candidate.lng === 'function' ? candidate.lng() : candidate.lng
+      if (Number.isFinite(lat) && Number.isFinite(lng)) bounds.extend({ lat: lat as number, lng: lng as number })
+    }
+    map.fitBounds(bounds, 56)
+  }
 
   useImperativeHandle(ref, () => ({
     showCurrentLocation(point) {
@@ -40,6 +88,8 @@ const GoogleMapView = forwardRef<GoogleMapViewHandle>(function GoogleMapView(_pr
       if (locationMarker.current) locationMarker.current.map = null
       locationMarker.current = null
     },
+    showRoute(route, origin, destination) { drawRoute(route, origin, destination) },
+    clearRoute,
   }), [])
 
   useEffect(() => {
@@ -69,8 +119,10 @@ const GoogleMapView = forwardRef<GoogleMapViewHandle>(function GoogleMapView(_pr
     setState('loading')
     setError('')
     void loadGoogleMaps()
-      .then(({ maps, marker }) => {
+      .then(({ core, maps, marker }) => {
         if (!mounted || authenticationFailed || !mapElement.current) return
+        coreLibrary.current = core
+        mapsLibrary.current = maps
         AdvancedMarker.current = marker.AdvancedMarkerElement
         mapInstance.current = new maps.Map(mapElement.current, {
           zoom: 2,
@@ -90,6 +142,7 @@ const GoogleMapView = forwardRef<GoogleMapViewHandle>(function GoogleMapView(_pr
             title: 'Your current pickup location',
           })
         }
+        if (currentRoute.current) drawRoute(currentRoute.current.route, currentRoute.current.origin, currentRoute.current.destination)
         setState('ready')
       })
       .catch(cause => {
@@ -103,7 +156,13 @@ const GoogleMapView = forwardRef<GoogleMapViewHandle>(function GoogleMapView(_pr
       mounted = false
       if (locationMarker.current) locationMarker.current.map = null
       locationMarker.current = null
+      routePolylines.current.forEach(polyline => polyline.setMap(null))
+      routePolylines.current = []
+      routeMarkers.current.forEach(routeMarker => { routeMarker.map = null })
+      routeMarkers.current = []
       AdvancedMarker.current = null
+      coreLibrary.current = null
+      mapsLibrary.current = null
       mapInstance.current = null
       if (mapsWindow.gm_authFailure === handleAuthFailure) mapsWindow.gm_authFailure = previousAuthFailure
     }

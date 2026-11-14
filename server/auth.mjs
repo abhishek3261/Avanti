@@ -71,8 +71,12 @@ export async function verifyGoogleCredential(credential) {
   let ticket
   try {
     ticket = await googleClient.verifyIdToken({ idToken: credential, audience: clientId })
-  } catch {
-    throw Object.assign(new Error('Google sign-in could not be verified.'), { status: 401 })
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : 'Unknown token verification error.'
+    console.error('Google ID token verification failed:', detail)
+    throw Object.assign(new Error(isProduction
+      ? 'Google sign-in could not be verified.'
+      : `Google sign-in could not be verified: ${detail}`), { status: 401 })
   }
   const payload = ticket.getPayload()
   if (!payload?.sub || !payload.email || payload.email_verified !== true) {

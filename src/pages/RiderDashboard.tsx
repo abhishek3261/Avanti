@@ -7,13 +7,17 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import GoogleMapView, { type GoogleMapViewHandle } from '../components/maps/GoogleMapView'
 import { createRide, listRides, updateRide, type Ride, type VehicleCategory } from '../lib/rides'
-import { loadGoogleMaps, type MapsPoint, type PlaceAutocompletePrediction } from '../lib/googleMaps'
+import { calculateDrivingRoute, loadGoogleMaps, type DrivingRoute, type MapsPoint, type PlaceAutocompletePrediction } from '../lib/googleMaps'
+import { calculateFare, fareConfig } from '../lib/fares'
 
 const vehicles = [
-  { name: 'Mini', detail: 'Affordable everyday rides', price: '₹149', eta: '3 min', icon: CarFront },
-  { name: 'Sedan', detail: 'A little more room to relax', price: '₹229', eta: '5 min', icon: CarFront },
-  { name: 'SUV', detail: 'Space for everyone & everything', price: '₹349', eta: '7 min', icon: CarFront },
+  { name: 'Mini', detail: 'Affordable everyday rides', icon: CarFront },
+  { name: 'Sedan', detail: 'A little more room to relax', icon: CarFront },
+  { name: 'SUV', detail: 'Space for everyone & everything', icon: CarFront },
 ]
+
+const currency = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })
+const currencyExact = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 function googleErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message
@@ -34,9 +38,15 @@ export default function RiderDashboard() {
   const { user } = useAuth()
   const mapRef = useRef<GoogleMapViewHandle>(null)
   const locationRequestId = useRef(0)
+  const pickupResolveId = useRef(0)
   const [selected, setSelected] = useState('Mini')
   const [pickup, setPickup] = useState('')
   const [pickupPoint, setPickupPoint] = useState<MapsPoint | null>(null)
+  const [pickupSuggestions, setPickupSuggestions] = useState<PlaceAutocompletePrediction[]>([])
+  const [pickupSearchBusy, setPickupSearchBusy] = useState(false)
+  const [pickupSearchError, setPickupSearchError] = useState('')
+  const pickupPlacesSession = useRef<object | null>(null)
+  const pickupRequestId = useRef(0)
   const [destination, setDestination] = useState('')
   const [destinationPoint, setDestinationPoint] = useState<MapsPoint | null>(null)
   const [destinationSuggestions, setDestinationSuggestions] = useState<PlaceAutocompletePrediction[]>([])
@@ -51,8 +61,38 @@ export default function RiderDashboard() {
   const [locating, setLocating] = useState(false)
   const [locationMessage, setLocationMessage] = useState('')
   const [locationError, setLocationError] = useState('')
+  const [pickupResolveBusy, setPickupResolveBusy] = useState(false)
+  const [pickupResolveError, setPickupResolveError] = useState('')
+  const [route, setRoute] = useState<DrivingRoute | null>(null)
+  const [routeBusy, setRouteBusy] = useState(false)
+  const [routeError, setRouteError] = useState('')
 
   const activeRide = rides.find(ride => ride.status === 'requested' || ride.status === 'accepted')
+  const selectedFare = route ? calculateFare(selected as VehicleCategory, route.distanceMeters, route.durationMillis) : null
+
+  useEffect(() => {
+    let active = true
+    mapRef.current?.clearRoute()
+    setRoute(null)
+    setRouteError('')
+    if (!pickupPoint || !destinationPoint) {
+      setRouteBusy(false)
+      return () => { active = false }
+    }
+
+    setRouteBusy(true)
+    void calculateDrivingRoute(pickupPoint, destinationPoint)
+      .then(result => {
+        if (!active) return
+        setRoute(result)
+        mapRef.current?.showRoute(result, pickupPoint, destinationPoint)
+      })
+      .catch(error => {
+        if (active) setRouteError(googleErrorMessage(error))
+      })
+      .finally(() => { if (active) setRouteBusy(false) })
+    return () => { active = false }
+  }, [pickupPoint, destinationPoint])
 
   useEffect(() => {
     const query = destination.trim()
@@ -92,6 +132,76 @@ export default function RiderDashboard() {
 
     return () => window.clearTimeout(timer)
   }, [destination, destinationPoint])
+
+  useEffect(() => {
+    const query = pickup.trim()
+    const requestId = ++pickupRequestId.current
+    if (pickupPoint || query.length < 3) {
+      setPickupSuggestions([])
+      setPickupSearchBusy(false)
+      setPickupSearchError('')
+      return () => { pickupRequestId.current += 1 }
+    }
+
+    const timer = window.setTimeout(() => {
+      setPickupSearchBusy(true)
+      setPickupSearchError('')
+      void loadGoogleMaps()
+        .then(({ places }) => {
+          pickupPlacesSession.current ??= new places.AutocompleteSessionToken()
+          return places.AutocompleteSuggestion.fetchAutocompleteSuggestions({ input: query, sessionToken: pickupPlacesSession.current, region: 'in' })
+        })
+        .then(({ suggestions }) => {
+          if (requestId === pickupRequestId.current) {
+            setPickupSuggestions(suggestions.flatMap(item => item.placePrediction ? [item.placePrediction] : []))
+          }
+        })
+        .catch(error => {
+          if (requestId === pickupRequestId.current) {
+            console.error('Google Places pickup autocomplete failed:', error)
+            setPickupSuggestions([])
+            setPickupSearchError(`Google Places error: ${googleErrorMessage(error)}`)
+          }
+        })
+        .finally(() => {
+          if (requestId === pickupRequestId.current) setPickupSearchBusy(false)
+        })
+    }, 250)
+
+    return () => {
+      window.clearTimeout(timer)
+      pickupRequestId.current += 1
+    }
+  }, [pickup, pickupPoint])
+
+  const selectPickup = async (prediction: PlaceAutocompletePrediction) => {
+    const requestId = ++pickupRequestId.current
+    pickupResolveId.current += 1
+    setPickupSearchBusy(true)
+    setPickupSearchError('')
+    setPickupSuggestions([])
+    setPickupResolveError('')
+    try {
+      const place = prediction.toPlace()
+      await place.fetchFields({ fields: ['formattedAddress', 'location'] })
+      if (requestId !== pickupRequestId.current) return
+      const location = place.location
+      const point = location && typeof (location as { lat?: unknown }).lat === 'function'
+        ? { lat: (location as { lat: () => number }).lat(), lng: (location as { lng: () => number }).lng() }
+        : location as MapsPoint | undefined
+      if (!point || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) throw new Error('Place has no usable location')
+      setPickupPoint(point)
+      setPickup(place.formattedAddress || prediction.text.toString())
+      pickupPlacesSession.current = null
+    } catch (error) {
+      if (requestId === pickupRequestId.current) {
+        console.error('Google Places pickup details failed:', error)
+        setPickupSearchError(`Could not load pickup details: ${googleErrorMessage(error)}`)
+      }
+    } finally {
+      if (requestId === pickupRequestId.current) setPickupSearchBusy(false)
+    }
+  }
 
   const selectDestination = async (prediction: PlaceAutocompletePrediction) => {
     const requestId = ++destinationRequestId.current
@@ -140,7 +250,7 @@ export default function RiderDashboard() {
   }, [])
 
   const requestRide = async () => {
-    if (!pickup.trim() || !destination.trim() || activeRide || bookingBusy) return
+    if (!pickup.trim() || !destination.trim() || !route || !selectedFare || activeRide || bookingBusy) return
     setBookingBusy(true)
     setRideError('')
     try {
@@ -169,9 +279,12 @@ export default function RiderDashboard() {
 
   const useCurrentLocation = () => {
     locationRequestId.current += 1
+    pickupResolveId.current += 1
     const requestId = locationRequestId.current
     setLocationError('')
     setLocationMessage('')
+    setPickupResolveBusy(false)
+    setPickupResolveError('')
 
     if (!window.isSecureContext) {
       setLocationError('Phone GPS needs a secure HTTPS page. This Wi-Fi address uses HTTP; use a trusted HTTPS development URL to enable location.')
@@ -219,19 +332,48 @@ export default function RiderDashboard() {
 
   const handlePickupChange = (value: string) => {
     locationRequestId.current += 1
+    pickupResolveId.current += 1
+    pickupPlacesSession.current = null
     setPickup(value)
     setPickupPoint(null)
     setLocating(false)
     setLocationError('')
     setLocationMessage('')
+    setPickupResolveBusy(false)
+    setPickupResolveError('')
     mapRef.current?.clearCurrentLocation()
+  }
+
+  const resolvePickupAddress = () => {
+    const address = pickup.trim()
+    if (!address || pickupPoint || pickupResolveBusy) return
+    const requestId = ++pickupResolveId.current
+    setPickupResolveBusy(true)
+    setPickupResolveError('')
+    void loadGoogleMaps()
+      .then(({ maps }) => new maps.Geocoder().geocode({ address }))
+      .then(({ results }) => {
+        if (requestId !== pickupResolveId.current) return
+        const match = results[0]
+        if (!match) throw new Error('No matching pickup address was found. Try a more specific address or use My location.')
+        const point = { lat: match.geometry.location.lat(), lng: match.geometry.location.lng() }
+        setPickupPoint(point)
+        if (match.formatted_address) setPickup(match.formatted_address)
+      })
+      .catch(error => {
+        if (requestId === pickupResolveId.current) setPickupResolveError(googleErrorMessage(error))
+      })
+      .finally(() => { if (requestId === pickupResolveId.current) setPickupResolveBusy(false) })
   }
 
   const swapLocations = () => {
     locationRequestId.current += 1
+    pickupResolveId.current += 1
     setLocating(false)
     setLocationError('')
     setLocationMessage('')
+    setPickupResolveBusy(false)
+    setPickupResolveError('')
     setPickup(destination)
     setPickupPoint(destinationPoint)
     setDestination(pickup)
@@ -241,24 +383,25 @@ export default function RiderDashboard() {
   }
 
   return <div className="rider-app rider-dashboard">
-    <div className="dashboard-topline">
-      <div>
-        <span className="eyebrow">YOUR NEXT GOOD JOURNEY</span>
-        <h1>Where to, <em>friend?</em></h1>
-        <p>Let’s find a ride that fits your day.</p>
-      </div>
-      <div className="rider-user rider-profile-card">
-        <div className="user-avatar">{user?.name.slice(0, 1).toUpperCase()}</div>
-        <div><b>{user?.name}</b><small>{user?.email}</small></div>
-        <span className="profile-role">RIDER</span>
-      </div>
-    </div>
-
     <div className="rider-grid">
-      <div className="rider-booking-stack">
+      <div className="rider-map-column">
         <GoogleMapView ref={mapRef} />
+      </div>
 
-        <section className="booking-panel glass-panel" id="ride-booking">
+      <div className="dashboard-topline">
+        <div>
+          <span className="eyebrow">YOUR NEXT GOOD JOURNEY</span>
+          <h1>Where to, <em>friend?</em></h1>
+          <p>Let’s find a ride that fits your day.</p>
+        </div>
+        <div className="rider-user rider-profile-card">
+          <div className="user-avatar">{user?.name.slice(0, 1).toUpperCase()}</div>
+          <div><b>{user?.name}</b><small>{user?.email}</small></div>
+          <span className="profile-role">RIDER</span>
+        </div>
+      </div>
+
+      <section className="booking-panel glass-panel" id="ride-booking">
           <div className="panel-heading">
             <div><span className="eyebrow">PLAN A RIDE</span><h2>Let’s get you there.</h2></div>
             <span className="panel-number">01 / BOOK</span>
@@ -267,10 +410,20 @@ export default function RiderDashboard() {
           <div className="location-fields">
             <div className="location-rail"><span className="rail-dot pickup-dot" /><span className="rail-dash" /><span className="rail-destination" /></div>
             <div className="pickup-location-wrap">
-              <label className="location-field pickup-location-field">
-                <span>Pickup location</span>
-                <input aria-label="Pickup location" value={pickup} onChange={event => handlePickupChange(event.target.value)} placeholder="Enter pickup or use GPS" />
-              </label>
+              <div className="pickup-field-wrap">
+                <label className="location-field pickup-location-field">
+                  <span>Pickup location</span>
+                  <input aria-label="Pickup location" aria-autocomplete="list" aria-controls="pickup-suggestions" aria-expanded={pickupSuggestions.length > 0} value={pickup} onChange={event => handlePickupChange(event.target.value)} onBlur={resolvePickupAddress} placeholder="Enter pickup or use GPS" />
+                </label>
+                {(pickupSuggestions.length > 0 || pickupSearchBusy || pickupSearchError) && <div className="destination-suggestions" id="pickup-suggestions" role="listbox" aria-label="Pickup suggestions">
+                  {pickupSuggestions.map((suggestion, index) => <button key={`${suggestion.text.toString()}-${index}`} type="button" role="option" className="destination-suggestion" onMouseDown={event => event.preventDefault()} onClick={() => void selectPickup(suggestion)}>
+                    <MapPin size={15} /><span>{suggestion.text.toString()}</span>
+                  </button>)}
+                  {pickupSearchBusy && <p className="destination-search-status" role="status">Searching places…</p>}
+                  {pickupSearchError && <p className="destination-search-error" role="alert">{pickupSearchError}</p>}
+                  {!pickupSearchBusy && !pickupSearchError && pickupSuggestions.length === 0 && pickup.trim().length >= 3 && <p className="destination-search-status">No matching places found.</p>}
+                </div>}
+              </div>
               <button className="pickup-current-location" type="button" onClick={useCurrentLocation} disabled={locating} aria-label="Use current location as pickup">
                 <LocateFixed size={15} /><span>{locating ? 'Locating…' : 'My location'}</span>
               </button>
@@ -293,31 +446,48 @@ export default function RiderDashboard() {
             </div>
           </div>
           {(locationMessage || locationError) && <p className={`location-feedback ${locationError ? 'is-error' : ''}`} role={locationError ? 'alert' : 'status'}>{locationError || locationMessage}</p>}
-          {pickupPoint && <p className="pickup-coordinate-note">GPS: {pickupPoint.lat.toFixed(5)}, {pickupPoint.lng.toFixed(5)}</p>}
+          {pickupResolveBusy && <p className="route-state" role="status">Finding pickup coordinates…</p>}
+          {pickupResolveError && <p className="route-error" role="alert">Pickup address: {pickupResolveError}</p>}
+          {pickupPoint && <p className="pickup-coordinate-note">Pickup coordinates: {pickupPoint.lat.toFixed(5)}, {pickupPoint.lng.toFixed(5)}</p>}
+          {routeBusy && <p className="route-state" role="status">Calculating the driving route…</p>}
+          {routeError && <p className="route-error" role="alert">Route unavailable: {routeError}</p>}
+          {route && <div className="route-summary" role="status">
+            <span><MapPin size={15} />{(route.distanceMeters / 1000).toFixed(1)} km by road</span>
+            <span><Clock3 size={15} />About {Math.max(1, Math.ceil(route.durationMillis / 60_000))} min</span>
+          </div>}
 
-        </section>
+      </section>
 
-        <section className="vehicle-panel" id="ride-options">
+      <section className="vehicle-panel" id="ride-options">
           <div className="vehicle-heading"><span>Choose your ride</span><small>Sample fares · Estimates only</small></div>
           <div className="vehicle-list">
             {vehicles.map(vehicle => {
               const Icon = vehicle.icon
               return <button key={vehicle.name} onClick={() => setSelected(vehicle.name)} className={`vehicle-card ${selected === vehicle.name ? 'selected' : ''}`} aria-pressed={selected === vehicle.name}>
                 <span className="vehicle-icon"><Icon size={27} /></span>
-                <span className="vehicle-info"><b>{vehicle.name}</b><small>{vehicle.detail}</small><span className="vehicle-meta"><Clock3 size={12} /> {vehicle.eta} away <span className="seat-meta"><Users size={12} /> {vehicle.name === 'Mini' ? '3' : '4'} seats</span></span></span>
-                <span className="vehicle-price">{vehicle.price}<small>est.</small></span>
+                <span className="vehicle-info"><b>{vehicle.name}</b><small>{vehicle.detail}</small><span className="vehicle-meta"><Users size={12} /> {vehicle.name === 'Mini' ? '3' : '4'} seats</span></span>
+                <span className="vehicle-price">{route ? currency.format(calculateFare(vehicle.name as VehicleCategory, route.distanceMeters, route.durationMillis).total) : '—'}<small>{route ? 'est.' : 'route needed'}</small></span>
                 {selected === vehicle.name && <span className="selected-check" aria-label="Selected">✓</span>}
               </button>
             })}
           </div>
-          <button className="button button-dark book-button" onClick={requestRide} disabled={!pickup.trim() || !destination.trim() || bookingBusy || Boolean(activeRide)}>{bookingBusy ? 'Sending request…' : activeRide ? 'Request sent' : `Request ${selected}`} {!bookingBusy && !activeRide && <ArrowRight size={16} />}</button>
+          {route && selectedFare && <div className="fare-breakdown" aria-label="Estimated fare breakdown">
+            <div className="fare-breakdown-heading"><div><b>{selected} estimated fare</b><small>Configurable Avanti demo rates</small></div><strong>{currency.format(selectedFare.total)}</strong></div>
+            <dl>
+              <div><dt>Base fare</dt><dd>{currencyExact.format(selectedFare.baseFare)}</dd></div>
+              <div><dt>Distance · {(route.distanceMeters / 1000).toFixed(1)} km × {currencyExact.format(fareConfig[selected as VehicleCategory].perKmRate)}/km</dt><dd>{currencyExact.format(selectedFare.distanceCharge)}</dd></div>
+              <div><dt>Time · {(route.durationMillis / 60_000).toFixed(1)} min × {currencyExact.format(fareConfig[selected as VehicleCategory].perMinuteRate)}/min</dt><dd>{currencyExact.format(selectedFare.timeCharge)}</dd></div>
+              <div><dt>Booking fee</dt><dd>{currencyExact.format(selectedFare.bookingFee)}</dd></div>
+              {selectedFare.adjustment !== 0 && <div><dt>{selectedFare.minimumFareApplied ? 'Minimum fare adjustment' : 'Rounding adjustment'}</dt><dd>{currencyExact.format(selectedFare.adjustment)}</dd></div>}
+            </dl>
+          </div>}
+          <button className="button button-dark book-button" onClick={requestRide} disabled={!pickup.trim() || !destination.trim() || !route || routeBusy || bookingBusy || Boolean(activeRide)}>{bookingBusy ? "Sending request…" : activeRide ? "Request sent" : routeBusy ? "Calculating route…" : routeError ? "Route unavailable" : selectedFare ? "Request " + selected + " · " + currency.format(selectedFare.total) + " est." : "Set route to estimate fare"} {!bookingBusy && !activeRide && !routeBusy && route && selectedFare && <ArrowRight size={16} />}</button>
           {activeRide && <div className="booking-confirm" role="status"><Sparkles size={16} /><span><b>{activeRide.status === 'accepted' ? 'Ride accepted' : 'Finding your driver'}</b> {activeRide.status === 'accepted' ? `Your driver${activeRide.driverName ? `, ${activeRide.driverName},` : ''} accepted your ${activeRide.vehicle} ride.` : 'Your request is visible in the driver portal.'}</span><button className="rider-cancel-ride" disabled={rideActionBusy} onClick={cancelRide}>{rideActionBusy ? 'Cancelling…' : 'Cancel'}</button></div>}
           {rideError && <p className="ride-error" role="alert">{rideError}</p>}
           {!activeRide && rides[0]?.status === 'declined' && <div className="booking-confirm ride-declined" role="status"><span><b>Request declined</b> Try another ride request.</span></div>}
           {!activeRide && rides[0]?.status === 'cancelled' && <div className="booking-confirm ride-declined" role="status"><span><b>Ride cancelled</b> You can request another ride whenever you are ready.</span></div>}
           <p className="booking-fineprint"><ShieldCheck size={13} /> Sample fares only. Your ride request is shared with drivers; payment is not available yet.</p>
-        </section>
-      </div>
+      </section>
 
       <aside className="rider-side">
         <div className="side-greeting">
