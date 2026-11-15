@@ -410,6 +410,51 @@
   color: #60785a;
 }
 
+.driver-refresh-button {
+  min-width: 90px;
+  min-height: 40px;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid #e1e8dc;
+  border-radius: 11px;
+  color: #476347;
+  background: #f8faf6;
+  font-size: 10px;
+  font-weight: 700;
+  transition: background 160ms ease, border-color 160ms ease, opacity 160ms ease;
+}
+
+.driver-refresh-button:hover:not(:disabled) {
+  border-color: #cbd9c3;
+  background: #edf4e8;
+}
+
+.driver-refresh-button:disabled {
+  cursor: wait;
+  opacity: .72;
+}
+
+.driver-refresh-button:focus-visible {
+  outline: 3px solid rgba(132, 166, 97, .35);
+  outline-offset: 2px;
+}
+
+.driver-refresh-button .is-spinning { animation: driver-refresh-spin .8s linear infinite; }
+
+@keyframes driver-refresh-spin { to { transform: rotate(360deg); } }
+
+.driver-refresh-status {
+  margin: -6px 0 12px;
+  color: #788374;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .driver-refresh-button .is-spinning { animation: none; }
+}
+
 .request-item {
   overflow: hidden;
   border: 1px solid #e7ebe4;

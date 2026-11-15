@@ -1,6 +1,6 @@
 import {
   ArrowUpRight, BadgeCheck, CalendarDays, CarFront, Check, Clock3,
-  MapPin, Navigation, Power, Save, ShieldCheck, Star, WalletCards, X,
+  MapPin, Navigation, Power, RefreshCw, Save, ShieldCheck, Star, WalletCards, X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
@@ -44,6 +44,15 @@ function mergeRideSnapshots(current: Ride[], incoming: Ride[]) {
   return [...merged.values()].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
 }
 
+function reconcileDriverRides(current: Ride[], incoming: Ride[], requestedAt: number) {
+  const incomingIds = new Set(incoming.map(ride => ride.id))
+  return mergeRideSnapshots(current, incoming).filter(ride => {
+    if (ride.status !== 'requested') return true
+    if (ride.requestExpiresAt != null && ride.requestExpiresAt <= Date.now()) return false
+    return incomingIds.has(ride.id) || Date.parse(ride.updatedAt) > requestedAt
+  })
+}
+
 function fromPosition(position: GeolocationPosition) {
   const { coords } = position
   return {
@@ -80,6 +89,8 @@ export default function DriverDashboard() {
   const [profileBusy, setProfileBusy] = useState(false)
   const [profileForm, setProfileForm] = useState({ vehicleModel: '', vehicleColor: '', vehicleRegistration: '' })
   const [rides, setRides] = useState<Ride[]>([])
+  const [rideRefreshBusy, setRideRefreshBusy] = useState(false)
+  const [rideRefreshMessage, setRideRefreshMessage] = useState('')
   const [rideBusy, setRideBusy] = useState<string | null>(null)
   const [rideError, setRideError] = useState('')
   const [gpsError, setGpsError] = useState('')
@@ -87,18 +98,47 @@ export default function DriverDashboard() {
   const [pickupRoute, setPickupRoute] = useState<DrivingRoute | null>(null)
   const [pickupRouteBusy, setPickupRouteBusy] = useState(false)
   const [requestClock, setRequestClock] = useState(Date.now())
+  const refreshSequenceRef = useRef(0)
+  const manualRefreshInFlightRef = useRef(false)
+  const pendingRideCountRef = useRef(0)
   const firstName = user?.name.split(' ')[0] || 'Driver'
 
   const incomingRides = useMemo(() => rides.filter(ride => ride.status === 'requested'), [rides])
+  pendingRideCountRef.current = incomingRides.length
   const activeRide = useMemo(() => rides.find(ride => activeStatuses.includes(ride.status)) || null, [rides])
   const targetRide = activeRide || incomingRides[0] || null
 
-  const refreshRides = useCallback(async () => {
+  const refreshRides = useCallback(async (manual = false) => {
+    if (!manual && manualRefreshInFlightRef.current) return
+    const requestId = ++refreshSequenceRef.current
+    const requestedAt = Date.now()
+    const pendingBeforeRefresh = pendingRideCountRef.current
+    if (manual) {
+      manualRefreshInFlightRef.current = true
+      setRideRefreshBusy(true)
+      setRideRefreshMessage('Refreshing ride requests…')
+      setRideError('')
+    }
     try {
       const latest = await listRides()
-      setRides(current => mergeRideSnapshots(current, latest))
+      if (requestId !== refreshSequenceRef.current) return
+      setRides(current => reconcileDriverRides(current, latest, requestedAt))
+      if (manual) {
+        const pendingCount = latest.filter(ride => ride.status === 'requested').length
+        const removedCount = Math.max(0, pendingBeforeRefresh - pendingCount)
+        const refreshedAt = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })
+        setRideRefreshMessage(`Updated ${refreshedAt} · ${pendingCount} pending request${pendingCount === 1 ? '' : 's'}${removedCount ? ` · ${removedCount} expired, cancelled, or claimed request${removedCount === 1 ? '' : 's'} removed` : ''}`)
+      }
     } catch (error) {
-      setRideError(error instanceof Error ? error.message : 'Could not refresh ride requests.')
+      if (requestId === refreshSequenceRef.current) {
+        setRideError(error instanceof Error ? error.message : 'Could not refresh ride requests.')
+        if (manual) setRideRefreshMessage('Refresh failed. Check your connection and try again.')
+      }
+    } finally {
+      if (manual) {
+        manualRefreshInFlightRef.current = false
+        setRideRefreshBusy(false)
+      }
     }
   }, [])
 
@@ -419,7 +459,8 @@ export default function DriverDashboard() {
 
         <div className="driver-work-grid">
           <section className="requests-panel" id="requests">
-            <div className="work-panel-header"><div><span className="eyebrow">LIVE DISPATCH</span><h2>{activeRide ? 'Your active ride' : 'Ride requests'} <span className="request-count">{activeRide ? '1' : incomingRides.length}</span></h2></div><button className="subtle-action" onClick={() => void refreshRides()}>Refresh</button></div>
+            <div className="work-panel-header"><div><span className="eyebrow">LIVE DISPATCH</span><h2>{activeRide ? 'Your active ride' : 'Ride requests'} <span className="request-count">{activeRide ? '1' : incomingRides.length}</span></h2></div><button className="subtle-action driver-refresh-button" disabled={rideRefreshBusy} onClick={() => void refreshRides(true)}><RefreshCw size={13} className={rideRefreshBusy ? 'is-spinning' : undefined} />{rideRefreshBusy ? 'Refreshing…' : 'Refresh'}</button></div>
+            {rideRefreshMessage && <p className="driver-refresh-status" role="status" aria-live="polite">{rideRefreshMessage}</p>}
             {!online && !activeRide && <div className="offline-overlay"><span><Power size={18} /></span><b>You’re offline</b><p>Allow location and go online to receive requests.</p><button onClick={setOnlineWithGps}>Go online <ArrowUpRight size={14} /></button></div>}
             {!activeRide && incomingRides.length === 0 && <div className="no-ride-requests"><CarFront size={21} /><b>No ride requests yet</b><span>New requests are delivered to online drivers.</span></div>}
             {activeRide && <RideCard ride={activeRide} online={online} busy={rideBusy === activeRide.id} pickupRoute={pickupRoute} routeBusy={pickupRouteBusy} countdown={null} onAction={action => void actOnRide(activeRide, action)} />}
