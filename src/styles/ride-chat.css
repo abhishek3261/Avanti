@@ -78,14 +78,26 @@
 @keyframes chat-dot { to { opacity: .35; transform: translateY(-2px); } }
 
 @media (max-width: 680px) {
-  .ride-chat-launch { min-height: 44px; }
-  .ride-chat-scrim { padding: 0; background: #f8faf6; backdrop-filter: none; -webkit-backdrop-filter: none; }
-  .ride-chat-window { width: 100%; height: 100dvh; min-height: 0; border: 0; border-radius: 0; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); box-shadow: none; }
-  .ride-chat-header { min-height: 68px; padding: 9px 13px; }
-  .ride-chat-messages { padding: 13px 12px; }
+  .ride-chat-launch { min-height: 46px; }
+  .ride-chat-scrim { padding: 0; overflow: hidden; background: #f8faf6; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .ride-chat-window { width: 100vw; height: 100vh; height: 100dvh; max-height: 100dvh; min-height: 0; border: 0; border-radius: 0; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); box-shadow: none; }
+  .ride-chat-header { min-height: 72px; padding: 10px 15px; }
+  .ride-chat-avatar { width: 44px; height: 44px; }
+  .ride-chat-person-copy b { font-size: 15px; }
+  .ride-chat-person-copy small { font-size: 11px; }
+  .ride-chat-state { font-size: 10px; }
+  .ride-chat-close { width: 42px; height: 42px; }
+  .ride-chat-ride-note { padding: 11px 15px; font-size: 11px; }
+  .ride-chat-messages { padding: 15px 14px; }
   .ride-chat-message { max-width: 89%; }
-  .ride-chat-composer { margin-right: 9px; margin-left: 9px; }
-  .ride-chat-compose-note { margin-bottom: 7px; }
+  .ride-chat-bubble { font-size: 14px; }
+  .ride-chat-message-meta { font-size: 10px; }
+  .ride-chat-quick-replies { gap: 8px; padding: 10px 12px; }
+  .ride-chat-quick-replies button { min-height: 38px; font-size: 10px; }
+  .ride-chat-composer { gap: 9px; margin-right: 10px; margin-left: 10px; padding: 8px; }
+  .ride-chat-composer textarea { min-height: 40px; padding: 10px 3px; font-size: 16px; }
+  .ride-chat-attach,.ride-chat-send { width: 42px; height: 42px; }
+  .ride-chat-compose-note { margin-bottom: 9px; font-size: 10px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

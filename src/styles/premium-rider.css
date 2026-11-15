@@ -753,12 +753,28 @@
 
 @media (max-width: 900px) {
   .rider-grid {
-    grid-template-columns: minmax(0, 1fr) minmax(270px, 320px);
+    grid-template-columns: minmax(0, 1fr);
     gap: 16px;
   }
 
+  .dashboard-topline,
+  .rider-map-column,
+  .booking-panel,
+  .vehicle-panel,
+  .rider-side {
+    grid-column: 1;
+    min-width: 0;
+  }
+
+  .dashboard-topline { grid-row: 1; margin: 0; }
+  .rider-map-column { grid-row: 2; }
+  .booking-panel { grid-row: 3; position: relative; top: auto; }
+  .vehicle-panel { grid-row: 4; margin-top: 0; }
+  .rider-side { grid-row: 5; }
+
   .map-stage {
-    height: clamp(430px, 62vh, 560px);
+    height: clamp(340px, 50svh, 460px);
+    min-height: 340px;
   }
 
   .vehicle-panel {
@@ -788,16 +804,18 @@
   .dashboard-topline {
     align-items: flex-start;
     gap: 13px;
-    margin-bottom: 21px;
+    margin-bottom: 0;
   }
 
   .dashboard-topline h1 {
-    font-size: clamp(27px, 8.4vw, 33px);
+    margin: 6px 0 4px;
+    font-size: clamp(25px, 7vw, 31px);
   }
 
   .dashboard-topline p {
-    max-width: 220px;
-    font-size: 10px;
+    max-width: 260px;
+    font-size: 12px;
+    line-height: 1.45;
   }
 
   .rider-profile-card {
@@ -816,10 +834,7 @@
     display: none;
   }
 
-  .rider-grid {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 15px;
-  }
+  .rider-grid { gap: 13px; }
 
   /* Reset desktop placements so Grid cannot create an implicit second column. */
   .rider-map-column,
@@ -830,16 +845,12 @@
     min-width: 0;
   }
 
-  .rider-map-column { grid-row: 1; }
-  .dashboard-topline {
-    grid-column: 1;
-    grid-row: 4;
-    margin: 0;
-  }
+  .dashboard-topline { grid-row: 1; }
+  .rider-map-column { grid-row: 2; }
 
   .rider-dashboard .map-stage {
     width: 100%;
-    height: clamp(280px, 40svh, 340px);
+    height: clamp(280px, 42svh, 340px);
     min-height: 280px;
     border-radius: 21px;
   }
@@ -855,7 +866,7 @@
   }
 
   .booking-panel {
-    grid-row: 2;
+    grid-row: 3;
     position: relative;
     top: auto;
     align-self: stretch;
@@ -876,7 +887,13 @@
   }
 
   .location-field {
-    height: 48px;
+    height: 54px;
+    margin-bottom: 9px;
+  }
+
+  .location-field input {
+    min-width: 0;
+    font-size: 16px;
   }
 
   .pickup-location-field input {
@@ -928,7 +945,7 @@
   .recent-destination b {
     display: -webkit-box;
     overflow: hidden;
-    font-size: 7px;
+    font-size: 10px;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
   }
@@ -938,14 +955,14 @@
   }
 
   .vehicle-panel {
-    grid-row: 3;
+    grid-row: 4;
     margin-top: 0;
     padding: 17px 13px 14px;
     border-radius: 19px;
   }
 
   .vehicle-heading > span {
-    font-size: 12px;
+    font-size: 15px;
   }
 
   .vehicle-list {
@@ -953,7 +970,7 @@
   }
 
   .vehicle-card {
-    min-height: 76px;
+    min-height: 82px;
     align-items: center;
     flex-wrap: nowrap;
     gap: 11px;
@@ -978,25 +995,21 @@
 
   .vehicle-info > small {
     margin: 3px 0 5px;
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.35;
   }
 
   .vehicle-meta {
-    font-size: 10px;
+    font-size: 11px;
   }
 
   .vehicle-price {
     flex: 0 0 auto;
-    font-size: 13px;
+    font-size: 14px;
     text-align: right;
   }
 
   .vehicle-price small {
-    font-size: 9px;
-  }
-
-  .vehicle-price {
     font-size: 10px;
   }
 
@@ -1025,7 +1038,7 @@
   }
 
   .side-greeting p {
-    font-size: 8px;
+    font-size: 11px;
   }
 
   .side-offer {
@@ -1044,15 +1057,15 @@
   }
 
   .side-offer b {
-    font-size: 8px;
+    font-size: 11px;
   }
 
   .side-offer p {
-    font-size: 7px;
+    font-size: 10px;
   }
 
   .side-offer a {
-    font-size: 7px;
+    font-size: 10px;
   }
 
   .side-driver {
@@ -1067,7 +1080,7 @@
 
   .dash-bottom-note {
     margin-top: 16px;
-    font-size: 7px;
+    font-size: 10px;
   }
 
   .rider-mobile-nav {
@@ -1089,14 +1102,14 @@
 
   .rider-mobile-nav a {
     display: flex;
-    min-height: 48px;
+    min-height: 50px;
     align-items: center;
     justify-content: center;
     flex-direction: column;
     gap: 3px;
     border-radius: 12px;
     color: #6b776c;
-    font-size: 8px;
+    font-size: 10px;
     font-weight: 700;
   }
 
