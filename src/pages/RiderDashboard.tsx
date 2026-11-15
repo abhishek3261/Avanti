@@ -1,5 +1,5 @@
 import {
-  ArrowDownUp, ArrowRight, ArrowUpRight, CarFront, Clock3, LocateFixed, MapPin,
+  ArrowDownUp, ArrowRight, ArrowUpRight, BadgeCheck, CarFront, Clock3, LocateFixed, MapPin,
   Plus, ShieldCheck, Sparkles, Star, Users, WalletCards, Copy, PhoneCall, Share2, Navigation,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -104,6 +104,11 @@ export default function RiderDashboard() {
   const lastDriverRouteRequestAt = useRef(0)
 
   const activeRide = rides.find(ride => ['requested', 'accepted', 'driver_arriving', 'driver_arrived', 'in_progress'].includes(ride.status))
+  const latestRide = rides[0]
+  const completedRide = !activeRide && latestRide?.status === 'completed' ? latestRide : null
+  const completedFare = completedRide?.routeDistanceMeters != null && completedRide.routeDurationSeconds != null
+    ? calculateFare(completedRide.vehicle, completedRide.routeDistanceMeters, completedRide.routeDurationSeconds * 1000)
+    : null
   const selectedFare = route ? calculateFare(selected as VehicleCategory, route.distanceMeters, route.durationMillis) : null
 
   useEffect(() => {
@@ -623,6 +628,35 @@ export default function RiderDashboard() {
       </section>
 
       <section className="vehicle-panel" id="ride-options">
+          {completedRide && <section className="trip-receipt" aria-live="polite" aria-label="Completed ride receipt">
+            <div className="trip-receipt-heading">
+              <span className="trip-receipt-icon"><BadgeCheck size={19} /></span>
+              <div><span className="eyebrow">TRIP COMPLETE</span><h2>Your ride is complete</h2></div>
+              <strong>{completedRide.estimatedFarePaise != null
+                ? currency.format(completedRide.estimatedFarePaise / 100)
+                : completedFare ? currency.format(completedFare.total) : 'Fare unavailable'}</strong>
+            </div>
+            <p className="trip-receipt-fare-label">Estimated fare · Avanti demo rates · No payment collected</p>
+            <div className="trip-receipt-route">
+              <div><span className="route-from" /><p><small>Pickup</small><b>{completedRide.pickup}</b></p></div>
+              <div className="request-route-line" />
+              <div><span className="route-to" /><p><small>Destination</small><b>{completedRide.destination}</b></p></div>
+            </div>
+            <div className="trip-receipt-facts">
+              <span><CarFront size={14} />{completedRide.vehicle}{completedRide.driver?.vehicleModel ? ` · ${completedRide.driver.vehicleModel}` : ''}</span>
+              {completedRide.routeDistanceMeters != null && <span><MapPin size={14} />{(completedRide.routeDistanceMeters / 1000).toFixed(1)} km route</span>}
+              {completedRide.startedAt && completedRide.completedAt && <span><Clock3 size={14} />{Math.max(1, Math.ceil((Date.parse(completedRide.completedAt) - Date.parse(completedRide.startedAt)) / 60_000))} min trip</span>}
+              {completedRide.completedAt && <span>Completed {new Date(completedRide.completedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>}
+            </div>
+            {completedFare && <dl className="trip-receipt-breakdown">
+              <div><dt>Base fare</dt><dd>{currencyExact.format(completedFare.baseFare)}</dd></div>
+              <div><dt>Route distance · {(completedRide.routeDistanceMeters! / 1000).toFixed(1)} km</dt><dd>{currencyExact.format(completedFare.distanceCharge)}</dd></div>
+              <div><dt>Estimated time · {Math.ceil(completedRide.routeDurationSeconds! / 60)} min</dt><dd>{currencyExact.format(completedFare.timeCharge)}</dd></div>
+              <div><dt>Booking fee</dt><dd>{currencyExact.format(completedFare.bookingFee)}</dd></div>
+              {completedFare.adjustment !== 0 && <div><dt>{completedFare.minimumFareApplied ? 'Minimum fare adjustment' : 'Rounding adjustment'}</dt><dd>{currencyExact.format(completedFare.adjustment)}</dd></div>}
+            </dl>}
+            <p className="trip-receipt-note">This is the fare estimate saved with your booking. Final fare calculation and payments are not available yet.</p>
+          </section>}
           <div className="vehicle-heading"><span>Choose your ride</span><small>Sample fares · Estimates only</small></div>
           <div className="vehicle-list">
             {vehicles.map(vehicle => {
