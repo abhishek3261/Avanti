@@ -1,14 +1,15 @@
 import {
   ArrowDownUp, ArrowRight, ArrowUpRight, CarFront, Clock3, LocateFixed, MapPin,
-  Plus, ShieldCheck, Sparkles, Star, Users, WalletCards,
+  Plus, ShieldCheck, Sparkles, Star, Users, WalletCards, Copy, PhoneCall, Share2, Navigation,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import GoogleMapView, { type GoogleMapViewHandle } from '../components/maps/GoogleMapView'
-import { createRide, listRides, updateRide, type Ride, type VehicleCategory } from '../lib/rides'
+import { createRide, createShareLink, listRides, revokeShareLink, updateRide, type Ride, type VehicleCategory } from '../lib/rides'
 import { calculateDrivingRoute, loadGoogleMaps, type DrivingRoute, type MapsPoint, type PlaceAutocompletePrediction } from '../lib/googleMaps'
 import { calculateFare, fareConfig } from '../lib/fares'
+import { connectSessionRealtime } from '../lib/realtime'
 
 const vehicles = [
   { name: 'Mini', detail: 'Affordable everyday rides', icon: CarFront },
@@ -66,8 +67,16 @@ export default function RiderDashboard() {
   const [route, setRoute] = useState<DrivingRoute | null>(null)
   const [routeBusy, setRouteBusy] = useState(false)
   const [routeError, setRouteError] = useState('')
+  const [driverRoute, setDriverRoute] = useState<DrivingRoute | null>(null)
+  const [driverRouteBusy, setDriverRouteBusy] = useState(false)
+  const [driverRouteError, setDriverRouteError] = useState('')
+  const [shareUrl, setShareUrl] = useState('')
+  const [shareBusy, setShareBusy] = useState(false)
+  const [shareMessage, setShareMessage] = useState('')
+  const [shareError, setShareError] = useState('')
+  const lastDriverRouteRequestAt = useRef(0)
 
-  const activeRide = rides.find(ride => ride.status === 'requested' || ride.status === 'accepted')
+  const activeRide = rides.find(ride => ['requested', 'accepted', 'driver_arriving', 'driver_arrived', 'in_progress'].includes(ride.status))
   const selectedFare = route ? calculateFare(selected as VehicleCategory, route.distanceMeters, route.durationMillis) : null
 
   useEffect(() => {
@@ -245,16 +254,74 @@ export default function RiderDashboard() {
       }
     }
     void refreshRides()
-    const timer = window.setInterval(() => { void refreshRides() }, 3000)
+    const timer = window.setInterval(() => { void refreshRides() }, 15000)
     return () => { active = false; window.clearInterval(timer) }
   }, [])
+
+  useEffect(() => {
+    const socket = connectSessionRealtime()
+    const applyRide = (ride: Ride) => setRides(current => [ride, ...current.filter(item => item.id !== ride.id)])
+    const applyDriverLocation = (event: { rideId: string; location: NonNullable<Ride['driverLocation']> }) => {
+      setRides(current => current.map(ride => ride.id === event.rideId ? { ...ride, driverLocation: event.location } : ride))
+    }
+    socket.on('ride:updated', applyRide)
+    socket.on('driver:location', applyDriverLocation)
+    socket.on('connect', () => { void listRides().then(setRides).catch(() => undefined) })
+    return () => {
+      socket.off('ride:updated', applyRide)
+      socket.off('driver:location', applyDriverLocation)
+    }
+  }, [])
+
+  useEffect(() => {
+    const activeLocation = activeRide?.driverLocation
+    const pickupPointForRide = activeRide?.pickupPoint
+    const destinationForRide = activeRide?.destinationPoint
+    if (!activeRide || !activeLocation) {
+      mapRef.current?.clearDriverLocation()
+      setDriverRoute(null)
+      return
+    }
+
+    const origin = { lat: activeLocation.latitude, lng: activeLocation.longitude }
+    mapRef.current?.showDriverLocation(origin, activeLocation.headingDegrees)
+    const isTripInProgress = activeRide.status === 'in_progress'
+    const target = isTripInProgress ? destinationForRide : pickupPointForRide
+    if (!target) return
+    const now = Date.now()
+    if (now - lastDriverRouteRequestAt.current < 12_000) return
+    lastDriverRouteRequestAt.current = now
+    let current = true
+    const timer = window.setTimeout(() => {
+      setDriverRouteBusy(true)
+      setDriverRouteError('')
+      void calculateDrivingRoute(origin, target)
+        .then(result => {
+          if (!current) return
+          setDriverRoute(result)
+          mapRef.current?.showRoute(result, origin, target)
+        })
+        .catch(error => {
+          if (current) setDriverRouteError(error instanceof Error ? error.message : 'Could not update the driver route.')
+        })
+        .finally(() => { if (current) setDriverRouteBusy(false) })
+    }, 400)
+    return () => { current = false; window.clearTimeout(timer) }
+  }, [activeRide?.id, activeRide?.status, activeRide?.driverLocation?.recordedAt, activeRide?.driverLocation?.latitude, activeRide?.driverLocation?.longitude])
 
   const requestRide = async () => {
     if (!pickup.trim() || !destination.trim() || !route || !selectedFare || activeRide || bookingBusy) return
     setBookingBusy(true)
     setRideError('')
     try {
-      const ride = await createRide({ pickup: pickup.trim(), destination: destination.trim(), vehicle: selected as VehicleCategory })
+      if (!pickupPoint || !destinationPoint) throw new Error('Select pickup and destination places before requesting a ride.')
+      const ride = await createRide({
+        pickup: pickup.trim(), destination: destination.trim(), vehicle: selected as VehicleCategory,
+        pickupLat: pickupPoint.lat, pickupLng: pickupPoint.lng,
+        destinationLat: destinationPoint.lat, destinationLng: destinationPoint.lng,
+        routeDistanceMeters: route.distanceMeters,
+        routeDurationSeconds: Math.max(1, Math.round(route.durationMillis / 1000)),
+      })
       setRides(current => [ride, ...current.filter(item => item.id !== ride.id)])
     } catch (error) {
       setRideError(error instanceof Error ? error.message : 'Could not send your ride request.')
@@ -274,6 +341,49 @@ export default function RiderDashboard() {
       setRideError(error instanceof Error ? error.message : 'Could not cancel this ride.')
     } finally {
       setRideActionBusy(false)
+    }
+  }
+
+  const shareTrip = async () => {
+    if (!activeRide || !['accepted', 'driver_arriving', 'driver_arrived', 'in_progress'].includes(activeRide.status) || shareBusy) return
+    setShareBusy(true)
+    setShareError('')
+    setShareMessage('')
+    try {
+      const link = await createShareLink(activeRide.id)
+      setShareUrl(link.url)
+      if (navigator.share) {
+        await navigator.share({ title: 'My Avanti trip', text: `Track my ride from ${activeRide.pickup} to ${activeRide.destination}.`, url: link.url })
+      } else {
+        await navigator.clipboard.writeText(link.url)
+        setShareMessage('Trip link copied. It expires when the trip ends or in 6 hours.')
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') return
+      setShareError(error instanceof Error ? error.message : 'Could not create the trip link.')
+    } finally {
+      setShareBusy(false)
+    }
+  }
+
+  const copyShareLink = async () => {
+    if (!shareUrl) return
+    try {
+      await navigator.clipboard.writeText(shareUrl)
+      setShareMessage('Trip link copied to clipboard.')
+    } catch {
+      setShareError('Copy is unavailable in this browser. Use Share Trip or select and copy the link.')
+    }
+  }
+
+  const revokeShare = async () => {
+    if (!activeRide) return
+    try {
+      await revokeShareLink(activeRide.id)
+      setShareUrl('')
+      setShareMessage('Trip sharing revoked.')
+    } catch (error) {
+      setShareError(error instanceof Error ? error.message : 'Could not revoke this trip link.')
     }
   }
 
@@ -456,6 +566,33 @@ export default function RiderDashboard() {
             <span><Clock3 size={15} />About {Math.max(1, Math.ceil(route.durationMillis / 60_000))} min</span>
           </div>}
 
+          {activeRide && activeRide.status !== 'requested' && activeRide.driver && <section className="assigned-driver-card" aria-live="polite">
+            <div className="assigned-driver-heading"><span className="eyebrow">{activeRide.status === 'in_progress' ? 'ON YOUR WAY' : 'DRIVER ASSIGNED'}</span><b>{activeRide.status.replace(/_/g, ' ')}</b></div>
+            <div className="assigned-driver-main">
+              <span className="assigned-driver-avatar">{activeRide.driver.name.slice(0, 1).toUpperCase()}</span>
+              <div className="assigned-driver-info"><b>{activeRide.driver.name}</b><small>{activeRide.driver.rating != null ? <><Star size={12} fill="currentColor" /> {activeRide.driver.rating.toFixed(1)}{activeRide.driver.ratingCount ? ` · ${activeRide.driver.ratingCount} rides` : ''}</> : 'Avanti driver'}</small></div>
+              {activeRide.driver.phone && <a className="driver-call-button" href={`tel:${activeRide.driver.phone}`} aria-label={`Call driver ${activeRide.driver.name}`}><PhoneCall size={16} /></a>}
+            </div>
+            <div className="assigned-vehicle-row"><CarFront size={17} /><span><b>{activeRide.driver.vehicleColor} {activeRide.driver.vehicleModel}</b><small>{activeRide.driver.vehicleRegistration}</small></span></div>
+            <div className="driver-approach-summary">
+              {driverRouteBusy ? <span><Navigation size={14} />Updating live route…</span> : driverRoute ? <>
+                <span><MapPin size={14} />{(driverRoute.distanceMeters / 1000).toFixed(1)} km {activeRide.status === 'in_progress' ? 'remaining' : 'to pickup'}</span>
+                <span><Clock3 size={14} />{Math.max(1, Math.ceil(driverRoute.durationMillis / 60_000))} min ETA</span>
+              </> : <span><Navigation size={14} />ETA will appear when the route is available</span>}
+              {activeRide.driverLocation && Date.now() - activeRide.driverLocation.updatedAt > 45_000 && <span className="driver-stale-warning">Last GPS update {new Date(activeRide.driverLocation.updatedAt).toLocaleTimeString()}</span>}
+            </div>
+            {driverRouteError && <p className="route-error">Live route unavailable: {driverRouteError}</p>}
+            <div className="trip-sharing-actions">
+              <button className="button button-dark" onClick={() => void shareTrip()} disabled={shareBusy}>{shareBusy ? 'Preparing link…' : <><Share2 size={15} /> Share trip</>}</button>
+              {shareUrl && <>
+                <button className="button button-outline" onClick={() => void copyShareLink()}><Copy size={14} /> Copy link</button>
+                <a className="button button-outline" target="_blank" rel="noreferrer" href={`https://wa.me/?text=${encodeURIComponent(`Track my Avanti trip: ${shareUrl}`)}`}>WhatsApp</a>
+                <button className="trip-share-revoke" onClick={() => void revokeShare()}>Revoke</button>
+              </>}
+            </div>
+            {(shareMessage || shareError) && <p className={shareError ? 'route-error' : 'trip-share-message'} role={shareError ? 'alert' : 'status'}>{shareError || shareMessage}</p>}
+          </section>}
+
       </section>
 
       <section className="vehicle-panel" id="ride-options">
@@ -482,9 +619,9 @@ export default function RiderDashboard() {
             </dl>
           </div>}
           <button className="button button-dark book-button" onClick={requestRide} disabled={!pickup.trim() || !destination.trim() || !route || routeBusy || bookingBusy || Boolean(activeRide)}>{bookingBusy ? "Sending request…" : activeRide ? "Request sent" : routeBusy ? "Calculating route…" : routeError ? "Route unavailable" : selectedFare ? "Request " + selected + " · " + currency.format(selectedFare.total) + " est." : "Set route to estimate fare"} {!bookingBusy && !activeRide && !routeBusy && route && selectedFare && <ArrowRight size={16} />}</button>
-          {activeRide && <div className="booking-confirm" role="status"><Sparkles size={16} /><span><b>{activeRide.status === 'accepted' ? 'Ride accepted' : 'Finding your driver'}</b> {activeRide.status === 'accepted' ? `Your driver${activeRide.driverName ? `, ${activeRide.driverName},` : ''} accepted your ${activeRide.vehicle} ride.` : 'Your request is visible in the driver portal.'}</span><button className="rider-cancel-ride" disabled={rideActionBusy} onClick={cancelRide}>{rideActionBusy ? 'Cancelling…' : 'Cancel'}</button></div>}
+          {activeRide && <div className="booking-confirm" role="status"><Sparkles size={16} /><span><b>{activeRide.status === 'requested' ? 'Finding your driver' : activeRide.status.replace(/_/g, ' ')}</b> {activeRide.status === 'requested' ? 'Your request is visible to online drivers.' : activeRide.status === 'in_progress' ? 'Your ride is in progress.' : `Your ${activeRide.vehicle} driver is on the way.`}</span>{activeRide.status !== 'in_progress' && <button className="rider-cancel-ride" disabled={rideActionBusy} onClick={cancelRide}>{rideActionBusy ? 'Cancelling…' : 'Cancel'}</button>}</div>}
           {rideError && <p className="ride-error" role="alert">{rideError}</p>}
-          {!activeRide && rides[0]?.status === 'declined' && <div className="booking-confirm ride-declined" role="status"><span><b>Request declined</b> Try another ride request.</span></div>}
+          {!activeRide && rides[0]?.status === 'rejected' && <div className="booking-confirm ride-declined" role="status"><span><b>Request expired or rejected</b> You can request another ride.</span></div>}
           {!activeRide && rides[0]?.status === 'cancelled' && <div className="booking-confirm ride-declined" role="status"><span><b>Ride cancelled</b> You can request another ride whenever you are ready.</span></div>}
           <p className="booking-fineprint"><ShieldCheck size={13} /> Sample fares only. Your ride request is shared with drivers; payment is not available yet.</p>
       </section>
@@ -495,7 +632,6 @@ export default function RiderDashboard() {
           <h3>Good days<br />are <em>ahead.</em></h3><p>Take a breath. We’ll take it from here.</p>
         </div>
         <div className="side-offer"><span className="offer-icon"><WalletCards size={21} /></span><div><b>Simple, upfront pricing.</b><p>Your sample fare is shown before you ride.</p><a href="#ride-options">See ride options <ArrowUpRight size={12} /></a></div></div>
-        <div className="side-driver"><div className="driver-mini-avatar">A</div><div className="driver-mini-info"><span className="eyebrow">SAMPLE DRIVER PROFILE</span><b>Alex M. <span className="rating"><Star size={11} fill="currentColor" /> 4.9</span></b><small>Avanti partner · Sample profile</small></div><div className="car-mini">✳</div></div>
         <Link className="switch-portal" to="/driver/login">Drive with Avanti <ArrowUpRight size={13} /></Link>
       </aside>
     </div>

@@ -7,6 +7,8 @@ type MapsAuthWindow = Window & { gm_authFailure?: () => void }
 export type GoogleMapViewHandle = {
   showCurrentLocation: (point: MapsPoint) => void
   clearCurrentLocation: () => void
+  showDriverLocation: (point: MapsPoint, headingDegrees?: number | null) => void
+  clearDriverLocation: () => void
   showRoute: (route: DrivingRoute, origin: MapsPoint, destination: MapsPoint) => void
   clearRoute: () => void
 }
@@ -18,6 +20,9 @@ const GoogleMapView = forwardRef<GoogleMapViewHandle>(function GoogleMapView(_pr
   const AdvancedMarker = useRef<MarkerLibrary['AdvancedMarkerElement'] | null>(null)
   const mapsLibrary = useRef<MapsLibrary | null>(null)
   const locationMarker = useRef<AdvancedMarkerInstance | null>(null)
+  const driverMarker = useRef<AdvancedMarkerInstance | null>(null)
+  const driverMarkerContent = useRef<HTMLElement | null>(null)
+  const driverAnimation = useRef<number | null>(null)
   const routeMarkers = useRef<AdvancedMarkerInstance[]>([])
   const routePolylines = useRef<GooglePolyline[]>([])
   const currentRoute = useRef<{ route: DrivingRoute; origin: MapsPoint; destination: MapsPoint } | null>(null)
@@ -88,6 +93,46 @@ const GoogleMapView = forwardRef<GoogleMapViewHandle>(function GoogleMapView(_pr
       if (locationMarker.current) locationMarker.current.map = null
       locationMarker.current = null
     },
+    showDriverLocation(point, headingDegrees) {
+      const map = mapInstance.current
+      const Marker = AdvancedMarker.current
+      if (!map || !Marker) return
+      if (!driverMarker.current) {
+        const content = document.createElement('span')
+        content.className = 'avanti-live-car-marker'
+        content.textContent = '▲'
+        driverMarkerContent.current = content
+        map.setCenter(point)
+        map.setZoom(15)
+        driverMarker.current = new Marker({ map, position: point, title: 'Driver live GPS location', content })
+      } else {
+        if (driverAnimation.current !== null) cancelAnimationFrame(driverAnimation.current)
+        const from = driverMarker.current.position
+        const beganAt = performance.now()
+        const duration = 700
+        const update = (now: number) => {
+          const progress = Math.min(1, (now - beganAt) / duration)
+          const eased = 1 - (1 - progress) ** 3
+          driverMarker.current!.position = {
+            lat: from.lat + (point.lat - from.lat) * eased,
+            lng: from.lng + (point.lng - from.lng) * eased,
+          }
+          if (progress < 1) driverAnimation.current = requestAnimationFrame(update)
+          else driverAnimation.current = null
+        }
+        driverAnimation.current = requestAnimationFrame(update)
+      }
+      if (typeof headingDegrees === 'number' && Number.isFinite(headingDegrees) && driverMarkerContent.current) {
+        driverMarkerContent.current.style.transform = `rotate(${headingDegrees}deg)`
+      }
+    },
+    clearDriverLocation() {
+      if (driverAnimation.current !== null) cancelAnimationFrame(driverAnimation.current)
+      driverAnimation.current = null
+      if (driverMarker.current) driverMarker.current.map = null
+      driverMarker.current = null
+      driverMarkerContent.current = null
+    },
     showRoute(route, origin, destination) { drawRoute(route, origin, destination) },
     clearRoute,
   }), [])
@@ -156,6 +201,11 @@ const GoogleMapView = forwardRef<GoogleMapViewHandle>(function GoogleMapView(_pr
       mounted = false
       if (locationMarker.current) locationMarker.current.map = null
       locationMarker.current = null
+      if (driverAnimation.current !== null) cancelAnimationFrame(driverAnimation.current)
+      driverAnimation.current = null
+      if (driverMarker.current) driverMarker.current.map = null
+      driverMarker.current = null
+      driverMarkerContent.current = null
       routePolylines.current.forEach(polyline => polyline.setMap(null))
       routePolylines.current = []
       routeMarkers.current.forEach(routeMarker => { routeMarker.map = null })

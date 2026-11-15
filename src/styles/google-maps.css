@@ -66,6 +66,22 @@
   pointer-events: none;
 }
 
+.avanti-live-car-marker {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  color: #f7ffe9;
+  background: #2b4e35;
+  box-shadow: 0 3px 15px rgba(16, 32, 18, .36);
+  font-size: 18px;
+  line-height: 1;
+  transition: transform 240ms ease-out;
+  will-change: transform;
+}
+
 @keyframes map-spin { to { transform: rotate(360deg); } }
 
 @media (prefers-reduced-motion: reduce) {

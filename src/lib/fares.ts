@@ -1,4 +1,5 @@
 import type { VehicleCategory } from './rides'
+import config from '../../shared/fare-config.json'
 
 export type FareConfig = {
   baseFare: number
@@ -9,11 +10,7 @@ export type FareConfig = {
 }
 
 // Configurable Avanti demo rates in INR. These are sample values, not market quotes.
-export const fareConfig: Record<VehicleCategory, FareConfig> = {
-  Mini: { baseFare: 45, perKmRate: 13, perMinuteRate: 1.5, bookingFee: 12, minimumFare: 80 },
-  Sedan: { baseFare: 65, perKmRate: 17, perMinuteRate: 2, bookingFee: 16, minimumFare: 115 },
-  SUV: { baseFare: 90, perKmRate: 22, perMinuteRate: 2.5, bookingFee: 20, minimumFare: 160 },
-}
+export const fareConfig = config as Record<VehicleCategory, FareConfig>
 
 export type FareEstimate = {
   baseFare: number

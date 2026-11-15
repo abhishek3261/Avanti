@@ -1,141 +1,420 @@
 import {
-  ArrowDownRight, ArrowUpRight, BadgeCheck, Bell, CalendarDays, CarFront,
-  Check, ChevronRight, CircleHelp, Clock3, Power, Settings2, ShieldCheck, Star, WalletCards, X,
+  ArrowUpRight, BadgeCheck, CalendarDays, CarFront, Check, Clock3,
+  MapPin, Navigation, Power, Save, ShieldCheck, Star, WalletCards, X,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { listRides, updateRide, type Ride } from '../lib/rides'
+import GoogleMapView, { type GoogleMapViewHandle } from '../components/maps/GoogleMapView'
+import { calculateDrivingRoute, type DrivingRoute, type MapsPoint } from '../lib/googleMaps'
+import {
+  driverGoOffline, driverGoOnline, getDriverLocation, getDriverProfile, listRides,
+  saveDriverProfile, sendDriverLocation, updateRide, type DriverLocation,
+  type DriverProfile, type Ride, type RideAction,
+} from '../lib/rides'
+import { connectSessionRealtime } from '../lib/realtime'
+
+const activeStatuses = ['accepted', 'driver_arriving', 'driver_arrived', 'in_progress']
+const currency = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })
+
+function fromPosition(position: GeolocationPosition) {
+  const { coords } = position
+  return {
+    latitude: coords.latitude,
+    longitude: coords.longitude,
+    accuracyMeters: Number.isFinite(coords.accuracy) ? coords.accuracy : undefined,
+    headingDegrees: Number.isFinite(coords.heading) ? coords.heading : null,
+    speedMetersPerSecond: Number.isFinite(coords.speed) ? coords.speed : null,
+    recordedAt: position.timestamp || Date.now(),
+  }
+}
+
+function statusLabel(status: Ride['status']) {
+  return ({
+    requested: 'New request', accepted: 'Ride accepted', driver_arriving: 'Heading to pickup',
+    driver_arrived: 'At pickup', in_progress: 'Trip in progress', completed: 'Completed',
+    rejected: 'Request expired', cancelled: 'Cancelled',
+  } as const)[status]
+}
 
 export default function DriverDashboard() {
   const { user } = useAuth()
+  const mapRef = useRef<GoogleMapViewHandle>(null)
+  const watchRef = useRef<number | null>(null)
+  const lastSentRef = useRef<{ time: number; point: MapsPoint } | null>(null)
+  const cleanupGenerationRef = useRef(0)
   const [online, setOnline] = useState(false)
-  const [showSampleBanner, setShowSampleBanner] = useState(true)
+  const [presenceBusy, setPresenceBusy] = useState(false)
+  const [location, setLocation] = useState<DriverLocation | null>(null)
+  const [profile, setProfile] = useState<DriverProfile | null>(null)
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [profileBusy, setProfileBusy] = useState(false)
+  const [profileForm, setProfileForm] = useState({ vehicleModel: '', vehicleColor: '', vehicleRegistration: '' })
   const [rides, setRides] = useState<Ride[]>([])
   const [rideBusy, setRideBusy] = useState<string | null>(null)
   const [rideError, setRideError] = useState('')
+  const [gpsError, setGpsError] = useState('')
+  const [gpsMessage, setGpsMessage] = useState('')
+  const [pickupRoute, setPickupRoute] = useState<DrivingRoute | null>(null)
+  const [pickupRouteBusy, setPickupRouteBusy] = useState(false)
+  const [requestClock, setRequestClock] = useState(Date.now())
   const firstName = user?.name.split(' ')[0] || 'Driver'
-  const activeRequestCount = rides.filter(ride => ride.status === 'requested').length
+
+  const incomingRides = useMemo(() => rides.filter(ride => ride.status === 'requested'), [rides])
+  const activeRide = useMemo(() => rides.find(ride => activeStatuses.includes(ride.status)) || null, [rides])
+  const targetRide = activeRide || incomingRides[0] || null
+
+  const refreshRides = useCallback(async () => {
+    try {
+      setRides(await listRides())
+    } catch (error) {
+      setRideError(error instanceof Error ? error.message : 'Could not refresh ride requests.')
+    }
+  }, [])
 
   useEffect(() => {
     let active = true
-    const refreshRides = async () => {
-      try {
-        const latest = await listRides()
-        if (active) setRides(latest)
-      } catch (error) {
-        if (active) setRideError(error instanceof Error ? error.message : 'Could not load ride requests.')
-      }
-    }
-    void refreshRides()
-    const timer = window.setInterval(() => { void refreshRides() }, 3000)
-    return () => { active = false; window.clearInterval(timer) }
+    void Promise.all([getDriverProfile(), getDriverLocation(), listRides()])
+      .then(([savedProfile, gps, rideList]) => {
+        if (!active) return
+        setProfile(savedProfile)
+        if (savedProfile) setProfileForm({
+          vehicleModel: savedProfile.vehicleModel || '',
+          vehicleColor: savedProfile.vehicleColor || '',
+          vehicleRegistration: savedProfile.vehicleRegistration || '',
+        })
+        setOnline(gps.online)
+        setLocation(gps.location)
+        setRides(rideList)
+        if (!savedProfile) setProfileOpen(true)
+      })
+      .catch(error => { if (active) setRideError(error instanceof Error ? error.message : 'Could not load your driver workspace.') })
+    return () => { active = false }
   }, [])
 
-  const actOnRide = async (ride: Ride, action: 'accept' | 'decline' | 'cancel') => {
+  useEffect(() => {
+    const socket = connectSessionRealtime()
+    const upsertRide = (ride: Ride) => setRides(current => [ride, ...current.filter(item => item.id !== ride.id)])
+    const onLocation = (event: { rideId: string; location: DriverLocation }) => {
+      if (activeRide?.id !== event.rideId) return
+      setRides(current => current.map(ride => ride.id === event.rideId ? { ...ride, driverLocation: event.location } : ride))
+    }
+    socket.on('ride:request', upsertRide)
+    socket.on('ride:updated', upsertRide)
+    socket.on('driver:location', onLocation)
+    socket.on('connect', () => { void refreshRides() })
+    return () => {
+      socket.off('ride:request', upsertRide)
+      socket.off('ride:updated', upsertRide)
+      socket.off('driver:location', onLocation)
+    }
+  }, [activeRide?.id, refreshRides])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => { void refreshRides() }, 15_000)
+    return () => window.clearInterval(timer)
+  }, [refreshRides])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setRequestClock(Date.now()), 1_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    if (!location) return
+    mapRef.current?.showDriverLocation({ lat: location.latitude, lng: location.longitude }, location.headingDegrees)
+  }, [location])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!targetRide?.pickupPoint || !location) {
+      setPickupRoute(null)
+      return () => { cancelled = true }
+    }
+    const origin = { lat: location.latitude, lng: location.longitude }
+    const destination = targetRide.status === 'in_progress' && targetRide.destinationPoint
+      ? targetRide.destinationPoint
+      : targetRide.pickupPoint
+    setPickupRouteBusy(true)
+    void calculateDrivingRoute(origin, destination)
+      .then(route => {
+        if (cancelled) return
+        setPickupRoute(route)
+        mapRef.current?.showRoute(route, origin, destination)
+      })
+      .catch(() => { if (!cancelled) setPickupRoute(null) })
+      .finally(() => { if (!cancelled) setPickupRouteBusy(false) })
+    return () => { cancelled = true }
+  }, [targetRide?.id, targetRide?.status, location?.latitude, location?.longitude])
+
+  useEffect(() => {
+    const generation = ++cleanupGenerationRef.current
+    return () => {
+      if (watchRef.current !== null && navigator.geolocation) navigator.geolocation.clearWatch(watchRef.current)
+      watchRef.current = null
+      lastSentRef.current = null
+      // StrictMode runs a development-only cleanup immediately after mount.
+      // Defer offlining so the next setup can cancel that cleanup.
+      window.setTimeout(() => {
+        if (cleanupGenerationRef.current === generation) void driverGoOffline().catch(() => undefined)
+      }, 0)
+    }
+  }, [])
+
+  const saveProfile = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setProfileBusy(true)
+    setRideError('')
+    try {
+      const saved = await saveDriverProfile(profileForm)
+      setProfile(saved)
+      setProfileOpen(false)
+      setGpsMessage('Vehicle details saved to your driver profile.')
+    } catch (error) {
+      setRideError(error instanceof Error ? error.message : 'Could not save your vehicle details.')
+    } finally {
+      setProfileBusy(false)
+    }
+  }
+
+  const stopGpsWatch = () => {
+    if (watchRef.current !== null && navigator.geolocation) navigator.geolocation.clearWatch(watchRef.current)
+    watchRef.current = null
+    lastSentRef.current = null
+  }
+
+  const setOffline = async () => {
+    if (presenceBusy) return
+    setPresenceBusy(true)
+    setGpsError('')
+    try {
+      await driverGoOffline()
+      stopGpsWatch()
+      setOnline(false)
+      setGpsMessage('You are offline. Location sharing has stopped.')
+    } catch (error) {
+      setGpsError(error instanceof Error ? error.message : 'Could not go offline.')
+    } finally {
+      setPresenceBusy(false)
+    }
+  }
+
+  const setOnlineWithGps = async () => {
+    if (presenceBusy) return
+    if (!profile?.vehicleModel || !profile.vehicleColor || !profile.vehicleRegistration) {
+      setProfileOpen(true)
+      setGpsError('Add your vehicle details before going online.')
+      return
+    }
+    if (!navigator.geolocation) {
+      setGpsError('This browser does not support location tracking. Open Avanti over HTTPS and allow location access.')
+      return
+    }
+    setPresenceBusy(true)
+    setGpsError('')
+    setGpsMessage('Requesting permission to use your GPS…')
+    navigator.geolocation.getCurrentPosition(async position => {
+      try {
+        const firstLocation = await driverGoOnline(fromPosition(position))
+        setLocation(firstLocation)
+        setOnline(true)
+        setGpsMessage('You are online. GPS updates are sent while this page is active.')
+        lastSentRef.current = { time: Date.now(), point: { lat: firstLocation.latitude, lng: firstLocation.longitude } }
+        stopGpsWatch()
+        watchRef.current = navigator.geolocation.watchPosition(async nextPosition => {
+          const next = fromPosition(nextPosition)
+          const point = { lat: next.latitude, lng: next.longitude }
+          setLocation(current => current
+            ? { ...current, ...next, accuracyMeters: next.accuracyMeters ?? current.accuracyMeters, updatedAt: Date.now() }
+            : { ...next, accuracyMeters: next.accuracyMeters ?? null, updatedAt: Date.now() })
+          const previous = lastSentRef.current
+          const elapsed = Date.now() - (previous?.time || 0)
+          const movedMeters = previous ? Math.hypot(point.lat - previous.point.lat, point.lng - previous.point.lng) * 111_000 : Number.POSITIVE_INFINITY
+          if (elapsed < 5_000 || (movedMeters < 8 && elapsed < 12_000)) return
+          try {
+            const sent = await sendDriverLocation(next)
+            setLocation(sent)
+            lastSentRef.current = { time: Date.now(), point }
+            setGpsError('')
+          } catch (error) {
+            setGpsError(error instanceof Error ? error.message : 'GPS updates are not reaching the server. Check your network.')
+          }
+        }, error => {
+          setGpsError(`GPS tracking stopped: ${error.message}. Move to a location with GPS reception or go offline.`)
+        }, { enableHighAccuracy: true, maximumAge: 2_000, timeout: 15_000 })
+        setPresenceBusy(false)
+      } catch (error) {
+        stopGpsWatch()
+        await driverGoOffline().catch(() => undefined)
+        setOnline(false)
+        setGpsMessage('')
+        setGpsError(error instanceof Error ? error.message : 'Could not go online.')
+        setPresenceBusy(false)
+      }
+    }, error => {
+      setGpsMessage('')
+      setGpsError(`Location permission is required to go online: ${error.message}`)
+      setPresenceBusy(false)
+    }, { enableHighAccuracy: true, maximumAge: 0, timeout: 15_000 })
+  }
+
+  const actOnRide = async (ride: Ride, action: RideAction) => {
     if (rideBusy) return
     setRideBusy(ride.id)
     setRideError('')
     try {
       const updated = await updateRide(ride.id, action)
-      if (action === 'decline' || action === 'cancel') setRides(current => current.filter(item => item.id !== updated.id))
-      else setRides(current => current.map(item => item.id === updated.id ? updated : item))
+      setRides(current => [updated, ...current.filter(item => item.id !== updated.id)])
+      if (updated.status === 'completed' || updated.status === 'cancelled' || updated.status === 'rejected') mapRef.current?.clearRoute()
     } catch (error) {
-      setRideError(error instanceof Error ? error.message : 'Could not update this ride request.')
+      setRideError(error instanceof Error ? error.message : 'Could not update this ride.')
+      void refreshRides()
     } finally {
       setRideBusy(null)
     }
   }
 
+  const minutesLeft = (ride: Ride) => ride.requestExpiresAt == null
+    ? 0
+    : Math.max(0, Math.ceil((ride.requestExpiresAt - requestClock) / 1_000))
+
   return <div className="driver-app">
     <aside className="driver-sidebar">
       <div className="driver-sidebar-brand"><span className="brand-mark">a<span>.</span></span><span className="brand-name">avanti</span><small>DRIVER</small></div>
-      <div className="sidebar-driver"><div className="driver-avatar">{user?.name.slice(0, 1).toUpperCase()}</div><div><b>{user?.name || 'Driver'}</b><small><span className="status-mini" /> Driver partner</small></div></div>
+      <div className="sidebar-driver"><div className="driver-avatar">{user?.name.slice(0, 1).toUpperCase()}</div><div><b>{user?.name}</b><small><span className="status-mini" /> Driver partner</small></div></div>
       <nav className="driver-nav" aria-label="Driver dashboard">
         <span className="eyebrow">WORKSPACE</span>
-        <a className="active" href="#overview"><span>▦</span> Overview</a>
-        <a href="#requests"><CarFront size={17} /> Ride requests <i>{activeRequestCount}</i></a>
-        <a href="#earnings"><WalletCards size={17} /> Earnings</a>
-        <a href="#trips"><Clock3 size={17} /> Trip history</a>
-        <span className="eyebrow nav-spacer">YOUR ACCOUNT</span>
-        <a href="#profile"><span>◉</span> My profile</a>
-        <a href="#settings"><Settings2 size={17} /> Settings</a>
-        <a href="#help"><CircleHelp size={17} /> Help &amp; support</a>
+        <a className="active" href="#overview"><CarFront size={17} /> Overview</a>
+        <a href="#requests"><Navigation size={17} /> Ride requests <i>{incomingRides.length}</i></a>
+        <a href="#live-map"><MapPin size={17} /> Live location</a>
+        <a href="#profile"><ShieldCheck size={17} /> Vehicle profile</a>
       </nav>
-      <div className="sidebar-bottom">
-        <div className="sidebar-support"><span className="support-spark">✳</span><b>Here when you need us.</b><small>Driver support is always a tap away.</small><a href="mailto:support@avanti.example">Get support <ArrowUpRight size={12} /></a></div>
-        <Link to="/" className="sidebar-home">← Back to Avanti</Link>
-      </div>
+      <div className="sidebar-bottom"><Link to="/" className="sidebar-home">â† Back to Avanti</Link></div>
     </aside>
 
     <main className="driver-main">
       <header className="driver-topbar">
         <div className="mobile-driver-brand"><Link to="/" className="brand"><span className="brand-mark">a<span>.</span></span><span className="brand-name">avanti</span></Link><span>DRIVER</span></div>
-        <span className="topbar-date"><CalendarDays size={15} /> Thursday, November 12, 2026</span>
-        <div className="topbar-actions"><span className="demo-chip">LIVE REQUESTS</span><button aria-label="Notifications" className="icon-button"><Bell size={17} /><i /></button><div className="topbar-avatar">{user?.name.slice(0, 1).toUpperCase()}</div></div>
+        <span className="topbar-date"><CalendarDays size={15} /> Driver workspace</span>
+        <div className="topbar-actions"><span className={`driver-presence-chip ${online ? 'is-online' : ''}`}>{online ? 'ONLINE · GPS ACTIVE' : 'OFFLINE'}</span><div className="topbar-avatar">{user?.name.slice(0, 1).toUpperCase()}</div></div>
       </header>
 
       <div className="driver-content" id="overview">
         <div className="driver-welcome">
-          <div><span className="eyebrow">THURSDAY, NOVEMBER 12</span><h1>Good morning, <em>{firstName}.</em></h1><p>Ready when you are. Your day’s looking good.</p></div>
+          <div><span className="eyebrow">AVANTI DRIVER</span><h1>Good roads, <em>{firstName}.</em></h1><p>Ride requests and your active trip appear here.</p></div>
           <div className={`online-toggle ${online ? 'is-online' : ''}`}>
-            <div><span className="status-dot" /><b>{online ? 'You’re online' : 'You’re offline'}</b><small>{online ? 'Available for ride requests' : 'Go online when you’re ready'}</small></div>
-            <button onClick={() => setOnline(!online)} aria-label={online ? 'Go offline' : 'Go online'}><Power size={17} /><span>{online ? 'Go offline' : 'Go online'}</span></button>
+            <div><span className="status-dot" /><b>{online ? 'You’re online' : 'You’re offline'}</b><small>{online ? 'Sharing GPS while this page is active' : 'Location is not being shared'}</small></div>
+            <button disabled={presenceBusy} onClick={() => online ? void setOffline() : void setOnlineWithGps()} aria-label={online ? 'Go offline' : 'Go online'}><Power size={17} /><span>{presenceBusy ? (online ? 'Going offline…' : 'Connecting…') : online ? 'Go offline' : 'Go online'}</span></button>
           </div>
         </div>
 
-        {showSampleBanner && <div className="sample-banner"><span>✳</span><div><b>Ride request board is live</b><p>Rider bookings appear here. Earnings and performance remain sample figures.</p></div><button aria-label="Dismiss sample data banner" onClick={() => setShowSampleBanner(false)}>×</button></div>}
+        {!profile?.vehicleModel && <section className="driver-profile-setup" id="profile">
+          <div><span className="eyebrow">BEFORE YOUR FIRST RIDE</span><h2>Add your vehicle details</h2><p>These details are shown to riders after you accept a request.</p></div>
+          <DriverProfileForm profileForm={profileForm} setProfileForm={setProfileForm} busy={profileBusy} onSubmit={saveProfile} />
+        </section>}
+        {profile?.vehicleModel && <section className="driver-vehicle-summary" id="profile">
+          <span className="driver-vehicle-icon"><CarFront size={22} /></span>
+          <div><span className="eyebrow">YOUR REGISTERED VEHICLE</span><b>{profile.vehicleColor} {profile.vehicleModel}</b><small>{profile.vehicleRegistration}</small></div>
+          {profile.rating != null && <span className="driver-real-rating"><Star size={13} fill="currentColor" /> {profile.rating.toFixed(1)}{profile.ratingCount > 0 ? ` · ${profile.ratingCount} rides` : ''}</span>}
+          <button className="subtle-action" onClick={() => setProfileOpen(value => !value)}>{profileOpen ? 'Close' : 'Edit vehicle'}</button>
+          {profileOpen && <DriverProfileForm profileForm={profileForm} setProfileForm={setProfileForm} busy={profileBusy} onSubmit={saveProfile} />}
+        </section>}
 
-        <section className="metric-grid" aria-label="Sample driver performance">
-          <article className="metric-card"><div className="metric-label">TODAY’S EARNINGS <span className="metric-icon green"><WalletCards size={17} /></span></div><strong>₹2,480<span className="trend"><ArrowUpRight size={13} /> 12%</span></strong><small>vs. your sample daily average</small><div className="mini-chart"><i style={{ height: '34%' }} /><i style={{ height: '45%' }} /><i style={{ height: '39%' }} /><i style={{ height: '62%' }} /><i style={{ height: '51%' }} /><i style={{ height: '75%' }} /><i style={{ height: '68%' }} /><i style={{ height: '90%' }} /></div></article>
-          <article className="metric-card"><div className="metric-label">COMPLETED RIDES <span className="metric-icon ochre"><CarFront size={17} /></span></div><strong>8<span className="metric-context">rides today</span></strong><small>2 more than your last Wednesday</small><div className="metric-progress"><span style={{ width: '68%' }} /></div><small className="progress-label">Daily goal <b>8 / 12 rides</b></small></article>
-          <article className="metric-card"><div className="metric-label">DRIVER RATING <span className="metric-icon peach"><Star size={17} /></span></div><strong>4.92<span className="rating-stars">★★★★★</span></strong><small>From 126 sample ratings</small><div className="rating-line"><span><BadgeCheck size={13} /> Top driver this week</span></div></article>
+        <section className="metric-grid driver-live-metrics" aria-label="Live driver status">
+          <article className="metric-card"><div className="metric-label">AVAILABILITY <span className="metric-icon green"><Power size={17} /></span></div><strong>{online ? 'Online' : 'Offline'}</strong><small>{online ? 'Your location is updating' : 'Tap Go online to receive requests'}</small></article>
+          <article className="metric-card"><div className="metric-label">ACTIVE RIDE <span className="metric-icon ochre"><CarFront size={17} /></span></div><strong>{activeRide ? statusLabel(activeRide.status) : 'None'}</strong><small>{activeRide ? `${activeRide.pickup} → ${activeRide.destination}` : `${incomingRides.length} pending request${incomingRides.length === 1 ? '' : 's'}`}</small></article>
+          <article className="metric-card"><div className="metric-label">GPS UPDATE <span className="metric-icon peach"><MapPin size={17} /></span></div><strong>{location ? `${Math.round(location.accuracyMeters || 0)} m` : 'Waiting'}</strong><small>{location ? `Updated ${new Date(location.updatedAt).toLocaleTimeString()}` : 'No location received yet'}</small></article>
         </section>
+
+        {(gpsError || gpsMessage) && <p className={`driver-location-message ${gpsError ? 'is-error' : ''}`} role={gpsError ? 'alert' : 'status'}>{gpsError || gpsMessage}</p>}
+        {rideError && <p className="ride-error" role="alert">{rideError}</p>}
 
         <div className="driver-work-grid">
           <section className="requests-panel" id="requests">
-            <div className="work-panel-header"><div><span className="eyebrow">YOUR NEXT OPPORTUNITY</span><h2>Ride requests <span className="request-count">{activeRequestCount}</span></h2></div><button className="subtle-action" onClick={() => document.getElementById('requests')?.scrollIntoView({ behavior: 'smooth' })}>See all <ChevronRight size={15} /></button></div>
-            {!online && <div className="offline-overlay"><span><Power size={18} /></span><b>You’re offline right now</b><p>Go online when you’re ready to see nearby ride requests.</p><button onClick={() => setOnline(true)}>Go online <ArrowUpRight size={14} /></button></div>}
-            {rides.length === 0 && <div className="no-ride-requests"><CarFront size={21} /><b>No ride requests yet</b><span>New rider bookings will appear here automatically.</span></div>}
-            {rides.map(ride => {
-              const accepted = ride.status === 'accepted'
-              return <article className={'request-item ' + (accepted ? 'ride-accepted' : '')} key={ride.id}>
-                <div className="request-top"><span className={'request-new ' + (accepted ? 'request-status' : '')}>{accepted ? 'RIDE ACCEPTED' : 'NEW REQUEST'}</span><span>{new Date(ride.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span></div>
-                <div className="request-rider-name">{ride.riderName} requested a ride</div>
-                <div className="request-route"><div><span className="route-from" /><div><b>{ride.pickup}</b><small>Pickup location</small></div></div><div className="request-route-line" /><div><span className="route-to" /><div><b>{ride.destination}</b><small>{ride.vehicle} ride</small></div></div></div>
-                <div className="request-bottom"><span><CarFront size={14} /> {ride.vehicle} <span className="request-divider">/</span> Request #{ride.id.slice(0, 6)}</span>
-                  <div className="request-actions">
-                    {accepted ? <button className="request-cancel" disabled={!online || rideBusy === ride.id} onClick={() => actOnRide(ride, 'cancel')}><X size={14} /> {rideBusy === ride.id ? 'Updating...' : 'Cancel ride'}</button> : <>
-                      <button className="request-cancel" disabled={!online || rideBusy === ride.id} onClick={() => actOnRide(ride, 'decline')}><X size={14} /> Decline</button>
-                      <button className="request-accept" disabled={!online || rideBusy === ride.id} onClick={() => actOnRide(ride, 'accept')}><Check size={14} /> {rideBusy === ride.id ? 'Accepting...' : 'Accept ride'}</button>
-                    </>}
-                  </div>
-                </div>
-              </article>
-            })}
-            {rideError && <p className="ride-error" role="alert">{rideError}</p>}
-            <p className="sample-action-note">Ride requests refresh automatically. Earnings and performance figures remain sample data.</p>
+            <div className="work-panel-header"><div><span className="eyebrow">LIVE DISPATCH</span><h2>{activeRide ? 'Your active ride' : 'Ride requests'} <span className="request-count">{activeRide ? '1' : incomingRides.length}</span></h2></div><button className="subtle-action" onClick={() => void refreshRides()}>Refresh</button></div>
+            {!online && <div className="offline-overlay"><span><Power size={18} /></span><b>You’re offline</b><p>Allow location and go online to receive requests.</p><button onClick={setOnlineWithGps}>Go online <ArrowUpRight size={14} /></button></div>}
+            {!activeRide && incomingRides.length === 0 && <div className="no-ride-requests"><CarFront size={21} /><b>No ride requests yet</b><span>New requests are delivered to online drivers.</span></div>}
+            {activeRide && <RideCard ride={activeRide} online={online} busy={rideBusy === activeRide.id} pickupRoute={pickupRoute} routeBusy={pickupRouteBusy} countdown={null} onAction={action => void actOnRide(activeRide, action)} />}
+            {!activeRide && incomingRides.map(ride => <RideCard key={ride.id} ride={ride} online={online} busy={rideBusy === ride.id} pickupRoute={targetRide?.id === ride.id ? pickupRoute : null} routeBusy={targetRide?.id === ride.id && pickupRouteBusy} countdown={minutesLeft(ride)} onAction={action => void actOnRide(ride, action)} />)}
+            <p className="driver-data-note">Only rider bookings and GPS updates are live. Earnings and ratings appear when real trip/payment data is available.</p>
           </section>
 
-          <aside className="earnings-panel" id="earnings">
-            <div className="work-panel-header"><div><span className="eyebrow">KEEP IT GOING</span><h2>Weekly earnings</h2></div><button className="period-select">This week⌄</button></div>
-            <div className="weekly-total">₹14,260 <span><ArrowUpRight size={13} /> 8.4%</span></div><span className="weekly-sub">A sample week that’s trending up</span>
-            <div className="earnings-chart"><div className="chart-grid"><i /><i /><i /></div><div className="chart-bars"><div><i style={{ height: '38%' }} /><small>M</small></div><div><i style={{ height: '57%' }} /><small>T</small></div><div><i style={{ height: '47%' }} /><small>W</small></div><div><i style={{ height: '76%' }} /><small>T</small></div><div><i style={{ height: '62%' }} /><small>F</small></div><div><i style={{ height: '89%' }} /><small>S</small></div><div className="today-bar"><i style={{ height: '50%' }} /><small>S</small></div></div></div>
-            <div className="earnings-chart-legend"><span><i /> SAMPLE EARNINGS</span><span>MON — SUN</span></div>
-            <div className="next-payout"><div className="payout-icon"><ArrowDownRight size={17} /></div><div><span className="eyebrow">NEXT SAMPLE PAYOUT</span><b>Monday, Nov 16</b></div><span className="payout-amount">₹8,450</span></div>
-          </aside>
+          <section className="earnings-panel driver-map-panel" id="live-map">
+            <div className="work-panel-header"><div><span className="eyebrow">{online ? 'LIVE GPS' : 'LAST LOCATION'}</span><h2>Driver map</h2></div><span className="driver-map-state">{online ? 'Updating' : 'Not sharing'}</span></div>
+            <GoogleMapView ref={mapRef} />
+            {targetRide && <div className="driver-map-caption"><Navigation size={15} /><span>{targetRide.status === 'in_progress' ? `Route to ${targetRide.destination}` : `Route to ${targetRide.pickup}`}</span>{pickupRoute && <b>{(pickupRoute.distanceMeters / 1000).toFixed(1)} km · {Math.ceil(pickupRoute.durationMillis / 60_000)} min</b>}</div>}
+            <p className="driver-background-note">GPS updates require this page to remain active. A browser/PWA cannot guarantee location tracking while closed or suspended.</p>
+          </section>
         </div>
 
-        <section className="driver-profile-card" id="profile"><div className="profile-icon"><ShieldCheck size={21} /></div><div><span className="eyebrow">YOUR AVANTI PROFILE</span><b>Everything’s looking good, {firstName}.</b><small>Your sample profile is complete and your vehicle is ready for the road.</small></div><div className="profile-tags"><span><BadgeCheck size={14} /> Verified</span><span><CarFront size={14} /> White Honda City</span><span><Star size={13} fill="currentColor" /> 4.92 rating</span></div><button className="profile-edit">View profile <ArrowUpRight size={14} /></button></section>
-        <footer className="driver-footer"><span>© 2025 Avanti Mobility, Inc. <i>✳</i></span><span>Good roads ahead, {firstName}.</span></footer>
+        <footer className="driver-footer"><span>â© 2026 Avanti Mobility, Inc.</span><span>Location sharing ends when you go offline.</span></footer>
       </div>
     </main>
-
     <nav className="driver-mobile-nav" aria-label="Driver dashboard shortcuts">
-      <a className="active" href="#overview"><span>▦</span><small>Overview</small></a>
-      <a href="#requests"><CarFront size={17} /><small>Requests</small></a>
-      <a href="#earnings"><WalletCards size={17} /><small>Earnings</small></a>
-      <a href="#profile"><ShieldCheck size={17} /><small>Profile</small></a>
+      <a className="active" href="#overview"><CarFront size={17} /><small>Overview</small></a>
+      <a href="#requests"><Navigation size={17} /><small>Requests</small></a>
+      <a href="#live-map"><MapPin size={17} /><small>Map</small></a>
+      <a href="#profile"><ShieldCheck size={17} /><small>Vehicle</small></a>
     </nav>
   </div>
+}
+
+function DriverProfileForm({ profileForm, setProfileForm, busy, onSubmit }: {
+  profileForm: { vehicleModel: string; vehicleColor: string; vehicleRegistration: string }
+  setProfileForm: (value: (current: { vehicleModel: string; vehicleColor: string; vehicleRegistration: string }) => { vehicleModel: string; vehicleColor: string; vehicleRegistration: string }) => void
+  busy: boolean
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+}) {
+  return <form className="driver-profile-form" onSubmit={onSubmit}>
+    <label>Vehicle model<input required minLength={2} maxLength={80} placeholder="e.g. Honda City" value={profileForm.vehicleModel} onChange={event => setProfileForm(current => ({ ...current, vehicleModel: event.target.value }))} /></label>
+    <label>Vehicle colour<input required minLength={2} maxLength={40} placeholder="e.g. White" value={profileForm.vehicleColor} onChange={event => setProfileForm(current => ({ ...current, vehicleColor: event.target.value }))} /></label>
+    <label>Registration number<input required minLength={4} maxLength={20} autoCapitalize="characters" placeholder="e.g. DL 01 AB 1234" value={profileForm.vehicleRegistration} onChange={event => setProfileForm(current => ({ ...current, vehicleRegistration: event.target.value.toUpperCase() }))} /></label>
+    <button className="button button-dark" disabled={busy}><Save size={15} />{busy ? 'Saving…' : 'Save vehicle'}</button>
+  </form>
+}
+
+function RideCard({ ride, online, busy, pickupRoute, routeBusy, countdown, onAction }: {
+  ride: Ride
+  online: boolean
+  busy: boolean
+  pickupRoute: DrivingRoute | null
+  routeBusy: boolean
+  countdown: number | null
+  onAction: (action: RideAction) => void
+}) {
+  const active = activeStatuses.includes(ride.status)
+  const estimatedFare = ride.estimatedFarePaise == null ? '—' : currency.format(ride.estimatedFarePaise / 100)
+  return <article className={`request-item live-request-item ${active ? 'ride-accepted' : ''}`}>
+    <div className="request-top"><span className={`request-new ${active ? 'request-status' : ''}`}>{statusLabel(ride.status)}</span><span>{countdown == null ? new Date(ride.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : countdown ? `${countdown}s to respond` : 'Request expired'}</span></div>
+    <div className="request-rider-name">{ride.riderName} · {ride.vehicle} request</div>
+    <div className="request-route">
+      <div><span className="route-from" /><div><b>{ride.pickup}</b><small>Pickup</small></div></div>
+      <div className="request-route-line" />
+      <div><span className="route-to" /><div><b>{ride.destination}</b><small>Destination</small></div></div>
+    </div>
+    <div className="driver-ride-facts">
+      <span><MapPin size={14} />{routeBusy ? 'Finding pickup route…' : pickupRoute ? `${(pickupRoute.distanceMeters / 1000).toFixed(1)} km to pickup` : 'Pickup distance unavailable'}</span>
+      <span><Navigation size={14} />{ride.routeDistanceMeters ? `${(ride.routeDistanceMeters / 1000).toFixed(1)} km trip` : 'Trip distance unavailable'}</span>
+      <span><WalletCards size={14} />{estimatedFare} estimated</span>
+    </div>
+    {countdown === 0 && <p className="driver-location-message is-error">This request has expired. Refresh for current requests.</p>}
+    <div className="request-actions live-request-actions">
+      {ride.status === 'requested' ? <>
+        <button className="request-cancel" disabled={!online || busy || countdown === 0} onClick={() => onAction('reject')}><X size={14} /> Reject</button>
+        <button className="request-accept" disabled={!online || busy || countdown === 0} onClick={() => onAction('accept')}><Check size={14} />{busy ? 'Accepting…' : 'Accept ride'}</button>
+      </> : ride.status === 'accepted' ? <>
+        <button className="request-cancel" disabled={busy} onClick={() => onAction('cancel')}><X size={14} /> Cancel</button>
+        <button className="request-accept" disabled={busy} onClick={() => onAction('arriving')}><Navigation size={14} /> I’m heading there</button>
+      </> : ride.status === 'driver_arriving' ? <>
+        <button className="request-cancel" disabled={busy} onClick={() => onAction('cancel')}><X size={14} /> Cancel</button>
+        <button className="request-accept" disabled={busy} onClick={() => onAction('arrived')}><MapPin size={14} /> I’ve arrived</button>
+      </> : ride.status === 'driver_arrived' ? <>
+        <span className="driver-arrived-label"><BadgeCheck size={15} /> Rider pickup confirmed</span>
+        <button className="request-accept" disabled={busy} onClick={() => onAction('start')}><CarFront size={14} /> Start ride</button>
+      </> : ride.status === 'in_progress' ? <>
+        <span className="driver-arrived-label"><Navigation size={15} /> Trip underway</span>
+        <button className="request-accept" disabled={busy} onClick={() => onAction('complete')}><Check size={14} /> Complete ride</button>
+      </> : <span className="driver-arrived-label"><Clock3 size={15} />{statusLabel(ride.status)}</span>}
+    </div>
+  </article>
 }

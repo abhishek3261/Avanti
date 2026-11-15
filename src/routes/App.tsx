@@ -5,9 +5,12 @@ import RiderDashboard from '../pages/RiderDashboard'
 import DriverDashboard from '../pages/DriverDashboard'
 import AppLayout from '../layouts/AppLayout'
 import RequireRole from './RequireRole'
+import SharedTripPage from '../pages/SharedTripPage'
 
 export default function App() {
-  return <Routes><Route element={<AppLayout />}>
+  return <Routes>
+    <Route path="/trip/:token" element={<SharedTripPage />} />
+    <Route element={<AppLayout />}>
     <Route path="/" element={<LandingPage />} />
     <Route path="/rider/login" element={<AuthPage role="rider" mode="login" />} />
     <Route path="/rider/register" element={<AuthPage role="rider" mode="register" />} />
@@ -16,5 +19,6 @@ export default function App() {
     <Route path="/driver/register" element={<AuthPage role="driver" mode="register" />} />
     <Route path="/driver/dashboard" element={<RequireRole role="driver"><DriverDashboard /></RequireRole>} />
     <Route path="*" element={<LandingPage />} />
-  </Route></Routes>
+    </Route>
+  </Routes>
 }
