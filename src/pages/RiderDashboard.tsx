@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import GoogleMapView, { type GoogleMapViewHandle } from '../components/maps/GoogleMapView'
+import RideChat from '../components/chat/RideChat'
 import { createRide, createShareLink, listRides, revokeShareLink, updateRide, type Ride, type VehicleCategory } from '../lib/rides'
 import { calculateDrivingRoute, loadGoogleMaps, type DrivingRoute, type MapsPoint, type PlaceAutocompletePrediction } from '../lib/googleMaps'
 import { calculateFare, fareConfig } from '../lib/fares'
@@ -616,6 +617,7 @@ export default function RiderDashboard() {
             {driverRouteError && <p className="route-error">Live route unavailable: {driverRouteError}</p>}
             <div className="trip-sharing-actions">
               <button className="button button-dark" onClick={() => void shareTrip()} disabled={shareBusy}>{shareBusy ? 'Preparing link…' : <><Share2 size={15} /> Share trip</>}</button>
+              <RideChat rideId={activeRide.id} rideStatus={activeRide.status} otherPartyName={activeRide.driver.name} otherPartyDetail={`${activeRide.driver.vehicleColor || ''} ${activeRide.driver.vehicleModel || 'Avanti driver'}`.trim()} />
               {shareUrl && <>
                 <button className="button button-outline" onClick={() => void copyShareLink()}><Copy size={14} /> Copy link</button>
                 <a className="button button-outline" target="_blank" rel="noreferrer" href={`https://wa.me/?text=${encodeURIComponent(`Track my Avanti trip: ${shareUrl}`)}`}>WhatsApp</a>
@@ -656,6 +658,7 @@ export default function RiderDashboard() {
               {completedFare.adjustment !== 0 && <div><dt>{completedFare.minimumFareApplied ? 'Minimum fare adjustment' : 'Rounding adjustment'}</dt><dd>{currencyExact.format(completedFare.adjustment)}</dd></div>}
             </dl>}
             <p className="trip-receipt-note">This is the fare estimate saved with your booking. Final fare calculation and payments are not available yet.</p>
+            {completedRide.driver && <RideChat rideId={completedRide.id} rideStatus={completedRide.status} otherPartyName={completedRide.driver.name} otherPartyDetail={`${completedRide.driver.vehicleColor || ''} ${completedRide.driver.vehicleModel || 'Avanti driver'}`.trim()} />}
           </section>}
           <div className="vehicle-heading"><span>Choose your ride</span><small>Sample fares · Estimates only</small></div>
           <div className="vehicle-list">

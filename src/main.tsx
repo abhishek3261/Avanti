@@ -11,6 +11,7 @@ import './styles/premium-rider.css'
 import './styles/premium-driver.css'
 import './styles/premium-auth.css'
 import './styles/google-maps.css'
+import './styles/ride-chat.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

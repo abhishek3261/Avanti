@@ -646,6 +646,8 @@
 .ride-error { margin: 9px 0; padding: 10px 12px; border: 1px solid #efd9d4; border-radius: 10px; color: #85483e; background: #fbf1ef; font-size: 10px; line-height: 1.5; }
 
 .rider-side {
+  display: grid;
+  align-content: start;
   grid-column: 2;
   grid-row: 3;
   gap: 13px;

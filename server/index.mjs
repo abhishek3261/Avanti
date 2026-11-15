@@ -11,6 +11,7 @@ import { z } from 'zod'
 import { db } from './database.mjs'
 import { clearSessionCookie, destroySession, hashPassword, newUserId, publicUser, readSessionUser, setSessionCookie, verifyGoogleCredential, verifyPassword } from './auth.mjs'
 import { createRealtimeServer, hashShareToken, rooms } from './realtime.mjs'
+import { chatRideIdSchema, getRideChat, getRideChatAccess, markRideChatRead } from './chat.mjs'
 
 const app = express()
 const port = Number(process.env.PORT || 4000)
@@ -318,6 +319,8 @@ function emitRideUpdate(ride) {
   if (terminalRideStatuses.includes(ride.status)) {
     db.prepare('UPDATE ride_share_links SET revoked_at = ? WHERE ride_id = ? AND revoked_at IS NULL').run(Date.now(), ride.id)
     io.in(rooms.ride(ride.id)).socketsLeave(rooms.ride(ride.id))
+    io.to(rooms.chat(ride.id)).emit('chat:ended', { rideId: ride.id, status: ride.status })
+    io.in(rooms.chat(ride.id)).socketsLeave(rooms.chat(ride.id))
   }
 }
 
@@ -327,6 +330,32 @@ app.get('/api/rides', requireAuth, (req, res) => {
     ? db.prepare(`${rideSelect} WHERE rides.rider_id = ? ORDER BY rides.created_at DESC LIMIT 20`).all(req.user.id)
     : db.prepare(`${rideSelect} WHERE (rides.status = 'requested' AND EXISTS (SELECT 1 FROM driver_locations WHERE driver_id = ? AND is_online = 1 AND updated_at > ?)) OR (rides.driver_id = ? AND rides.status IN ('accepted', 'driver_arriving', 'driver_arrived', 'in_progress')) ORDER BY CASE WHEN rides.status = 'requested' THEN 0 ELSE 1 END, rides.created_at DESC LIMIT 50`).all(req.user.id, Date.now() - 45_000, req.user.id)
   res.json({ rides: rows.map(publicRide) })
+})
+
+app.get('/api/rides/:id/chat', requireAuth, (req, res) => {
+  const parsed = chatRideIdSchema.safeParse(req.params.id)
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid ride ID.' })
+  try {
+    return res.json(getRideChat(parsed.data, req.user.id))
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error instanceof Error ? error.message : 'Could not load ride chat.' })
+  }
+})
+
+app.post('/api/rides/:id/chat/read', requireAuth, (req, res) => {
+  const parsed = chatRideIdSchema.safeParse(req.params.id)
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid ride ID.' })
+  try {
+    const result = markRideChatRead(parsed.data, req.user.id)
+    for (const senderId of result.senderIds) io.to(rooms.user(senderId)).emit('chat:receipt', {
+      rideId: parsed.data,
+      messageIds: result.messageIds,
+      readAt: result.readAt,
+    })
+    return res.json(result)
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error instanceof Error ? error.message : 'Could not mark chat messages as read.' })
+  }
 })
 
 function calculateEstimatedFare(vehicle, distanceMeters, durationSeconds) {

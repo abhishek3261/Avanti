@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import GoogleMapView, { type GoogleMapViewHandle } from '../components/maps/GoogleMapView'
+import RideChat from '../components/chat/RideChat'
 import { calculateDrivingRoute, type DrivingRoute, type MapsPoint } from '../lib/googleMaps'
 import {
   driverGoOffline, driverGoOnline, getDriverLocation, getDriverProfile, listRides,
@@ -545,5 +546,6 @@ function RideCard({ ride, online, busy, pickupRoute, routeBusy, countdown, onAct
         <button className="request-accept" disabled={busy} onClick={() => onAction('complete')}><Check size={14} /> Complete ride</button>
       </> : <span className="driver-arrived-label"><Clock3 size={15} />{statusLabel(ride.status)}</span>}
     </div>
+    {active && <div className="driver-chat-action"><RideChat rideId={ride.id} rideStatus={ride.status} otherPartyName={ride.riderName} otherPartyDetail="Rider" /></div>}
   </article>
 }

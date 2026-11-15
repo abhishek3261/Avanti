@@ -7,6 +7,7 @@
     "dev": "concurrently -k \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "node --watch server/index.mjs",
     "dev:web": "vite",
+    "test:chat": "node --test server/chat.test.mjs",
     "start": "node server/index.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview"

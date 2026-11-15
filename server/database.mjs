@@ -86,12 +86,27 @@ db.exec(`
     revoked_at INTEGER
   );
 
+  CREATE TABLE IF NOT EXISTS ride_messages (
+    id TEXT PRIMARY KEY,
+    ride_id TEXT NOT NULL REFERENCES rides(id) ON DELETE CASCADE,
+    sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    recipient_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    client_message_id TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    delivered_at TEXT,
+    read_at TEXT,
+    UNIQUE (sender_id, client_message_id)
+  );
+
   CREATE INDEX IF NOT EXISTS rides_status_created_idx ON rides(status, created_at DESC);
   CREATE INDEX IF NOT EXISTS rides_rider_created_idx ON rides(rider_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS rides_driver_status_idx ON rides(driver_id, status);
   CREATE INDEX IF NOT EXISTS driver_locations_online_idx ON driver_locations(is_online, updated_at DESC);
   CREATE UNIQUE INDEX IF NOT EXISTS driver_profiles_registration_idx ON driver_profiles(UPPER(vehicle_registration)) WHERE vehicle_registration IS NOT NULL;
   CREATE INDEX IF NOT EXISTS ride_share_links_ride_idx ON ride_share_links(ride_id, expires_at DESC);
+  CREATE INDEX IF NOT EXISTS ride_messages_conversation_idx ON ride_messages(ride_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS ride_messages_unread_idx ON ride_messages(ride_id, recipient_id, read_at);
 `)
 
 function migrateRideLifecycle() {
