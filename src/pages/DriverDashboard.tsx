@@ -16,6 +16,33 @@ import { connectSessionRealtime } from '../lib/realtime'
 
 const activeStatuses = ['accepted', 'driver_arriving', 'driver_arrived', 'in_progress']
 const currency = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })
+const rideStatusOrder: Record<Ride['status'], number> = {
+  requested: 0,
+  accepted: 1,
+  driver_arriving: 2,
+  driver_arrived: 3,
+  in_progress: 4,
+  rejected: 5,
+  cancelled: 5,
+  completed: 5,
+}
+
+function mergeRideSnapshots(current: Ride[], incoming: Ride[]) {
+  const merged = new Map(current.map(ride => [ride.id, ride]))
+  for (const ride of incoming) {
+    const existing = merged.get(ride.id)
+    if (!existing) {
+      merged.set(ride.id, ride)
+      continue
+    }
+    const existingTime = Date.parse(existing.updatedAt)
+    const incomingTime = Date.parse(ride.updatedAt)
+    if (incomingTime > existingTime || (incomingTime === existingTime && rideStatusOrder[ride.status] >= rideStatusOrder[existing.status])) {
+      merged.set(ride.id, ride)
+    }
+  }
+  return [...merged.values()].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+}
 
 function fromPosition(position: GeolocationPosition) {
   const { coords } = position
@@ -66,7 +93,8 @@ export default function DriverDashboard() {
 
   const refreshRides = useCallback(async () => {
     try {
-      setRides(await listRides())
+      const latest = await listRides()
+      setRides(current => mergeRideSnapshots(current, latest))
     } catch (error) {
       setRideError(error instanceof Error ? error.message : 'Could not refresh ride requests.')
     }
@@ -94,7 +122,7 @@ export default function DriverDashboard() {
 
   useEffect(() => {
     const socket = connectSessionRealtime()
-    const upsertRide = (ride: Ride) => setRides(current => [ride, ...current.filter(item => item.id !== ride.id)])
+    const upsertRide = (ride: Ride) => setRides(current => mergeRideSnapshots(current, [ride]))
     const onLocation = (event: { rideId: string; location: DriverLocation }) => {
       if (activeRide?.id !== event.rideId) return
       setRides(current => current.map(ride => ride.id === event.rideId ? { ...ride, driverLocation: event.location } : ride))
@@ -264,7 +292,7 @@ export default function DriverDashboard() {
     setRideError('')
     try {
       const updated = await updateRide(ride.id, action)
-      setRides(current => [updated, ...current.filter(item => item.id !== updated.id)])
+      setRides(current => mergeRideSnapshots(current, [updated]))
       if (updated.status === 'completed' || updated.status === 'cancelled' || updated.status === 'rejected') mapRef.current?.clearRoute()
     } catch (error) {
       setRideError(error instanceof Error ? error.message : 'Could not update this ride.')
@@ -332,7 +360,7 @@ export default function DriverDashboard() {
         <div className="driver-work-grid">
           <section className="requests-panel" id="requests">
             <div className="work-panel-header"><div><span className="eyebrow">LIVE DISPATCH</span><h2>{activeRide ? 'Your active ride' : 'Ride requests'} <span className="request-count">{activeRide ? '1' : incomingRides.length}</span></h2></div><button className="subtle-action" onClick={() => void refreshRides()}>Refresh</button></div>
-            {!online && <div className="offline-overlay"><span><Power size={18} /></span><b>You’re offline</b><p>Allow location and go online to receive requests.</p><button onClick={setOnlineWithGps}>Go online <ArrowUpRight size={14} /></button></div>}
+            {!online && !activeRide && <div className="offline-overlay"><span><Power size={18} /></span><b>You’re offline</b><p>Allow location and go online to receive requests.</p><button onClick={setOnlineWithGps}>Go online <ArrowUpRight size={14} /></button></div>}
             {!activeRide && incomingRides.length === 0 && <div className="no-ride-requests"><CarFront size={21} /><b>No ride requests yet</b><span>New requests are delivered to online drivers.</span></div>}
             {activeRide && <RideCard ride={activeRide} online={online} busy={rideBusy === activeRide.id} pickupRoute={pickupRoute} routeBusy={pickupRouteBusy} countdown={null} onAction={action => void actOnRide(activeRide, action)} />}
             {!activeRide && incomingRides.map(ride => <RideCard key={ride.id} ride={ride} online={online} busy={rideBusy === ride.id} pickupRoute={targetRide?.id === ride.id ? pickupRoute : null} routeBusy={targetRide?.id === ride.id && pickupRouteBusy} countdown={minutesLeft(ride)} onAction={action => void actOnRide(ride, action)} />)}
