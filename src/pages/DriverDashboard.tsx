@@ -68,6 +68,8 @@ export default function DriverDashboard() {
   const { user } = useAuth()
   const mapRef = useRef<GoogleMapViewHandle>(null)
   const watchRef = useRef<number | null>(null)
+  const gpsHeartbeatRef = useRef<number | null>(null)
+  const trackingActiveRef = useRef(false)
   const lastSentRef = useRef<{ time: number; point: MapsPoint } | null>(null)
   const cleanupGenerationRef = useRef(0)
   const [online, setOnline] = useState(false)
@@ -179,7 +181,10 @@ export default function DriverDashboard() {
     const generation = ++cleanupGenerationRef.current
     return () => {
       if (watchRef.current !== null && navigator.geolocation) navigator.geolocation.clearWatch(watchRef.current)
+      if (gpsHeartbeatRef.current !== null) window.clearInterval(gpsHeartbeatRef.current)
+      trackingActiveRef.current = false
       watchRef.current = null
+      gpsHeartbeatRef.current = null
       lastSentRef.current = null
       // StrictMode runs a development-only cleanup immediately after mount.
       // Defer offlining so the next setup can cancel that cleanup.
@@ -206,14 +211,19 @@ export default function DriverDashboard() {
   }
 
   const stopGpsWatch = () => {
+    trackingActiveRef.current = false
     if (watchRef.current !== null && navigator.geolocation) navigator.geolocation.clearWatch(watchRef.current)
+    if (gpsHeartbeatRef.current !== null) window.clearInterval(gpsHeartbeatRef.current)
     watchRef.current = null
+    gpsHeartbeatRef.current = null
     lastSentRef.current = null
   }
 
   const setOffline = async () => {
     if (presenceBusy) return
     setPresenceBusy(true)
+    const wasTracking = trackingActiveRef.current
+    trackingActiveRef.current = false
     setGpsError('')
     try {
       await driverGoOffline()
@@ -221,6 +231,7 @@ export default function DriverDashboard() {
       setOnline(false)
       setGpsMessage('You are offline. Location sharing has stopped.')
     } catch (error) {
+      trackingActiveRef.current = wasTracking
       setGpsError(error instanceof Error ? error.message : 'Could not go offline.')
     } finally {
       setPresenceBusy(false)
@@ -247,9 +258,11 @@ export default function DriverDashboard() {
         setLocation(firstLocation)
         setOnline(true)
         setGpsMessage('You are online. GPS updates are sent while this page is active.')
-        lastSentRef.current = { time: Date.now(), point: { lat: firstLocation.latitude, lng: firstLocation.longitude } }
         stopGpsWatch()
+        trackingActiveRef.current = true
+        lastSentRef.current = { time: Date.now(), point: { lat: firstLocation.latitude, lng: firstLocation.longitude } }
         watchRef.current = navigator.geolocation.watchPosition(async nextPosition => {
+          if (!trackingActiveRef.current) return
           const next = fromPosition(nextPosition)
           const point = { lat: next.latitude, lng: next.longitude }
           setLocation(current => current
@@ -265,11 +278,58 @@ export default function DriverDashboard() {
             lastSentRef.current = { time: Date.now(), point }
             setGpsError('')
           } catch (error) {
-            setGpsError(error instanceof Error ? error.message : 'GPS updates are not reaching the server. Check your network.')
+            if (trackingActiveRef.current && error instanceof Error && error.message === 'Go online before sending driver location.') {
+              try {
+                const restored = await driverGoOnline(next)
+                setLocation(restored)
+                setOnline(true)
+                lastSentRef.current = { time: Date.now(), point }
+                setGpsError('')
+                setGpsMessage('GPS connection restored. You are online again.')
+              } catch (recoveryError) {
+                setGpsError(recoveryError instanceof Error ? recoveryError.message : 'GPS updates are not reaching the server. Check your network.')
+              }
+            } else if (trackingActiveRef.current) {
+              setGpsError(error instanceof Error ? error.message : 'GPS updates are not reaching the server. Check your network.')
+            }
           }
         }, error => {
-          setGpsError(`GPS tracking stopped: ${error.message}. Move to a location with GPS reception or go offline.`)
+          if (trackingActiveRef.current) setGpsError(`GPS tracking stopped: ${error.message}. Move to a location with GPS reception or go offline.`)
         }, { enableHighAccuracy: true, maximumAge: 2_000, timeout: 15_000 })
+        gpsHeartbeatRef.current = window.setInterval(() => {
+          if (!trackingActiveRef.current) return
+          navigator.geolocation.getCurrentPosition(async freshPosition => {
+            if (!trackingActiveRef.current) return
+            const fresh = fromPosition(freshPosition)
+            const point = { lat: fresh.latitude, lng: fresh.longitude }
+            try {
+              const sent = await sendDriverLocation(fresh)
+              if (!trackingActiveRef.current) return
+              setLocation(sent)
+              lastSentRef.current = { time: Date.now(), point }
+              setGpsError('')
+            } catch (error) {
+              if (!trackingActiveRef.current) return
+              if (error instanceof Error && error.message === 'Go online before sending driver location.') {
+                try {
+                  const restored = await driverGoOnline(fresh)
+                  if (!trackingActiveRef.current) return
+                  setLocation(restored)
+                  setOnline(true)
+                  lastSentRef.current = { time: Date.now(), point }
+                  setGpsError('')
+                  setGpsMessage('GPS connection restored. You are online again.')
+                } catch (recoveryError) {
+                  setGpsError(recoveryError instanceof Error ? recoveryError.message : 'GPS updates are not reaching the server. Check your network.')
+                }
+              } else {
+                setGpsError(error instanceof Error ? error.message : 'GPS updates are not reaching the server. Check your network.')
+              }
+            }
+          }, error => {
+            if (trackingActiveRef.current) setGpsError(`Could not refresh GPS: ${error.message}. Keep Avanti open and check location permission.`)
+          }, { enableHighAccuracy: true, maximumAge: 0, timeout: 15_000 })
+        }, 15_000)
         setPresenceBusy(false)
       } catch (error) {
         stopGpsWatch()

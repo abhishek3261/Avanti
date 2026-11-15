@@ -19,6 +19,33 @@ const vehicles = [
 
 const currency = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })
 const currencyExact = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const rideStatusOrder: Record<Ride['status'], number> = {
+  requested: 0,
+  accepted: 1,
+  driver_arriving: 2,
+  driver_arrived: 3,
+  in_progress: 4,
+  rejected: 5,
+  cancelled: 5,
+  completed: 5,
+}
+
+function mergeRideSnapshots(current: Ride[], incoming: Ride[]) {
+  const merged = new Map(current.map(ride => [ride.id, ride]))
+  for (const ride of incoming) {
+    const existing = merged.get(ride.id)
+    if (!existing) {
+      merged.set(ride.id, ride)
+      continue
+    }
+    const existingTime = Date.parse(existing.updatedAt)
+    const incomingTime = Date.parse(ride.updatedAt)
+    if (incomingTime > existingTime || (incomingTime === existingTime && rideStatusOrder[ride.status] >= rideStatusOrder[existing.status])) {
+      merged.set(ride.id, ride)
+    }
+  }
+  return [...merged.values()].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+}
 
 function googleErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message
@@ -248,7 +275,7 @@ export default function RiderDashboard() {
     const refreshRides = async () => {
       try {
         const latest = await listRides()
-        if (active) setRides(latest)
+        if (active) setRides(current => mergeRideSnapshots(current, latest))
       } catch {
         // Keep the last known ride status visible during temporary network loss.
       }
@@ -260,13 +287,13 @@ export default function RiderDashboard() {
 
   useEffect(() => {
     const socket = connectSessionRealtime()
-    const applyRide = (ride: Ride) => setRides(current => [ride, ...current.filter(item => item.id !== ride.id)])
+    const applyRide = (ride: Ride) => setRides(current => mergeRideSnapshots(current, [ride]))
     const applyDriverLocation = (event: { rideId: string; location: NonNullable<Ride['driverLocation']> }) => {
       setRides(current => current.map(ride => ride.id === event.rideId ? { ...ride, driverLocation: event.location } : ride))
     }
     socket.on('ride:updated', applyRide)
     socket.on('driver:location', applyDriverLocation)
-    socket.on('connect', () => { void listRides().then(setRides).catch(() => undefined) })
+    socket.on('connect', () => { void listRides().then(latest => setRides(current => mergeRideSnapshots(current, latest))).catch(() => undefined) })
     return () => {
       socket.off('ride:updated', applyRide)
       socket.off('driver:location', applyDriverLocation)
@@ -322,7 +349,7 @@ export default function RiderDashboard() {
         routeDistanceMeters: route.distanceMeters,
         routeDurationSeconds: Math.max(1, Math.round(route.durationMillis / 1000)),
       })
-      setRides(current => [ride, ...current.filter(item => item.id !== ride.id)])
+      setRides(current => mergeRideSnapshots(current, [ride]))
     } catch (error) {
       setRideError(error instanceof Error ? error.message : 'Could not send your ride request.')
     } finally {
@@ -336,7 +363,7 @@ export default function RiderDashboard() {
     setRideError('')
     try {
       const updated = await updateRide(activeRide.id, 'cancel')
-      setRides(current => current.map(ride => ride.id === updated.id ? updated : ride))
+      setRides(current => mergeRideSnapshots(current, [updated]))
     } catch (error) {
       setRideError(error instanceof Error ? error.message : 'Could not cancel this ride.')
     } finally {

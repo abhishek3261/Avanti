@@ -45,12 +45,23 @@ type DriverProfileInput = { vehicleModel: string; vehicleColor: string; vehicleR
 type LocationInput = Omit<DriverLocation, 'updatedAt' | 'accuracyMeters' | 'headingDegrees' | 'speedMetersPerSecond'> & Partial<Pick<DriverLocation, 'accuracyMeters' | 'headingDegrees' | 'speedMetersPerSecond'>>
 
 async function apiRequest<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const response = await fetch(path, {
-    method,
-    credentials: 'include',
-    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 20_000)
+  let response: Response
+  try {
+    response = await fetch(path, {
+      method,
+      credentials: 'include',
+      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+    })
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('The server took too long to respond. Check your connection and refresh rides.')
+    throw error
+  } finally {
+    window.clearTimeout(timeout)
+  }
   if (response.status === 204) return undefined as T
   const data = await response.json().catch(() => ({})) as { error?: string } & T
   if (!response.ok) throw new Error(data.error || 'Unable to update the ride. Please try again.')
