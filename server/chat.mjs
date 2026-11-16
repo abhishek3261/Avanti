@@ -19,8 +19,8 @@ function chatError(message, status) {
   return Object.assign(new Error(message), { status })
 }
 
-export function getRideChatAccess(rideId, userId) {
-  const ride = db.prepare(`SELECT id, rider_id, driver_id, status, accepted_at
+export async function getRideChatAccess(rideId, userId) {
+  const ride = await db.prepare(`SELECT id, rider_id, driver_id, status, accepted_at
     FROM rides WHERE id = ?`).get(rideId)
   if (!ride) throw chatError('Ride not found.', 404)
   if (!ride.accepted_at || !ride.driver_id || !readableStatuses.has(ride.status)) {
@@ -50,27 +50,18 @@ function publicMessage(row) {
   }
 }
 
-export function getRideChat(rideId, userId) {
-  const access = getRideChatAccess(rideId, userId)
-  const rows = db.prepare(`SELECT * FROM ride_messages WHERE ride_id = ?
-    ORDER BY created_at DESC, id DESC LIMIT 100`).all(rideId).reverse()
-  const unreadCount = db.prepare(`SELECT COUNT(*) AS count FROM ride_messages
-    WHERE ride_id = ? AND recipient_id = ? AND read_at IS NULL`).get(rideId, userId).count
+export async function getRideChat(rideId, userId) {
+  const access = await getRideChatAccess(rideId, userId)
+  const rows = (await db.prepare(`SELECT * FROM ride_messages WHERE ride_id = ?
+    ORDER BY created_at DESC, id DESC LIMIT 100`).all(rideId)).reverse()
+  const unreadCount = (await db.prepare(`SELECT COUNT(*) AS count FROM ride_messages
+    WHERE ride_id = ? AND recipient_id = ? AND read_at IS NULL`).get(rideId, userId)).count
   return { messages: rows.map(publicMessage), unreadCount, canSend: access.canSend }
 }
 
-export function createRideChatMessage(input, userId) {
-  const access = getRideChatAccess(input.rideId, userId)
+export async function createRideChatMessage(input, userId) {
+  const access = await getRideChatAccess(input.rideId, userId)
   if (!access.canSend) throw chatError('This ride chat is closed. You can still read its messages.', 409)
-
-  const existing = db.prepare(`SELECT * FROM ride_messages
-    WHERE sender_id = ? AND client_message_id = ?`).get(userId, input.clientMessageId)
-  if (existing) {
-    if (existing.ride_id !== input.rideId || existing.body !== input.body) {
-      throw chatError('This message ID was already used for a different message.', 409)
-    }
-    return { message: publicMessage(existing), recipientId: existing.recipient_id }
-  }
 
   const row = {
     id: randomUUID(),
@@ -81,9 +72,18 @@ export function createRideChatMessage(input, userId) {
     body: input.body,
     createdAt: new Date().toISOString(),
   }
-  db.prepare(`INSERT INTO ride_messages
+  const inserted = await db.prepare(`INSERT INTO ride_messages
     (id, ride_id, sender_id, recipient_id, client_message_id, body, created_at)
-    VALUES (@id, @rideId, @senderId, @recipientId, @clientMessageId, @body, @createdAt)`).run(row)
+    VALUES (@id, @rideId, @senderId, @recipientId, @clientMessageId, @body, @createdAt)
+    ON CONFLICT (sender_id, client_message_id) DO NOTHING RETURNING *`).get(row)
+  if (!inserted) {
+    const existing = await db.prepare(`SELECT * FROM ride_messages
+      WHERE sender_id = ? AND client_message_id = ?`).get(userId, input.clientMessageId)
+    if (existing.ride_id !== input.rideId || existing.body !== input.body) {
+      throw chatError('This message ID was already used for a different message.', 409)
+    }
+    return { message: publicMessage(existing), recipientId: existing.recipient_id }
+  }
   return { message: publicMessage({
     id: row.id,
     ride_id: row.rideId,
@@ -97,23 +97,22 @@ export function createRideChatMessage(input, userId) {
   }), recipientId: row.recipientId }
 }
 
-export function markRideChatDelivered(rideId, messageId, userId) {
-  getRideChatAccess(rideId, userId)
+export async function markRideChatDelivered(rideId, messageId, userId) {
+  await getRideChatAccess(rideId, userId)
   const deliveredAt = new Date().toISOString()
-  const result = db.prepare(`UPDATE ride_messages SET delivered_at = COALESCE(delivered_at, ?)
-    WHERE id = ? AND ride_id = ? AND recipient_id = ? AND delivered_at IS NULL`).run(deliveredAt, messageId, rideId, userId)
-  if (!result.changes) return null
-  const row = db.prepare('SELECT * FROM ride_messages WHERE id = ?').get(messageId)
+  const row = await db.prepare(`UPDATE ride_messages SET delivered_at = COALESCE(delivered_at, ?)
+    WHERE id = ? AND ride_id = ? AND recipient_id = ? AND delivered_at IS NULL RETURNING *`).get(deliveredAt, messageId, rideId, userId)
+  if (!row) return null
   return { message: publicMessage(row), deliveredAt: row.delivered_at }
 }
 
-export function markRideChatRead(rideId, userId) {
-  getRideChatAccess(rideId, userId)
-  const unread = db.prepare(`SELECT id, sender_id FROM ride_messages
+export async function markRideChatRead(rideId, userId) {
+  await getRideChatAccess(rideId, userId)
+  const unread = await db.prepare(`SELECT id, sender_id FROM ride_messages
     WHERE ride_id = ? AND recipient_id = ? AND read_at IS NULL`).all(rideId, userId)
   if (!unread.length) return { messageIds: [], senderIds: [], readAt: null }
   const readAt = new Date().toISOString()
-  db.prepare(`UPDATE ride_messages SET delivered_at = COALESCE(delivered_at, ?), read_at = ?
+  await db.prepare(`UPDATE ride_messages SET delivered_at = COALESCE(delivered_at, ?), read_at = ?
     WHERE ride_id = ? AND recipient_id = ? AND read_at IS NULL`).run(readAt, readAt, rideId, userId)
   return {
     messageIds: unread.map(message => message.id),

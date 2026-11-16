@@ -1,6 +1,6 @@
 # Avanti
 
-Responsive cab booking web app built with React, TypeScript, Vite, Tailwind CSS 4, React Router, Express, and SQLite.
+Responsive cab booking web app built with React, TypeScript, Vite, Tailwind CSS 4, React Router, Express, and PostgreSQL.
 
 ## Run locally
 
@@ -10,7 +10,27 @@ Copy-Item .env.example .env
 npm run dev
 ```
 
-Vite runs the web app at `http://localhost:5173`; the API runs at `http://localhost:4000` and the Vite server proxies `/api` calls to it. The local SQLite file is created at `data/avanti.sqlite` on the first API start.
+Vite runs the web app at `http://localhost:5173`; the API runs at `http://localhost:4000` and the Vite server proxies `/api` and Socket.IO calls to it. The API requires PostgreSQL through `DATABASE_URL` and creates its schema at startup.
+
+Before starting the API, configure `DATABASE_URL` in `.env`. For local PostgreSQL, create an empty database named `avanti` and set a URL such as `postgresql://postgres:YOUR_PASSWORD@localhost:5432/avanti`. Keep credentials only in the ignored `.env`; never put them in a `VITE_` variable. Set `DATABASE_SSL=true` for a TLS-required provider, or use the provider's connection URL with `sslmode=require`. The API uses a bounded connection pool (`DATABASE_POOL_MAX`, default 10), and `/api/health` reports whether PostgreSQL is reachable.
+
+### SQLite to PostgreSQL data transfer
+
+The app no longer uses SQLite at runtime. To move the existing local database:
+
+1. Stop the API and make sure the SQLite source is at `data/avanti.sqlite` (or set `DATABASE_PATH` in `.env` to its path).
+2. Configure `DATABASE_URL` for a **new, empty PostgreSQL database**. The transfer utility refuses to write into a PostgreSQL database that already has application rows.
+3. Run:
+
+   ```powershell
+   npm run migrate:postgres
+   ```
+
+The command creates a consistent SQLite backup under `data/backups/`, then transfers users, sessions, rides, driver profiles and locations, share links, and chat messages in one PostgreSQL transaction. It checks table counts and foreign-key relationships before committing. The original SQLite file and backup are preserved and ignored by Git. If the transfer fails, the PostgreSQL transaction rolls back; investigate the reported issue and rerun against the still-empty target. Keep the backup until the PostgreSQL app has been exercised and verified.
+
+Rollback means redeploying the prior SQLite-backed app version and restoring its original SQLite path/backup; the new PostgreSQL-backed server does not support SQLite as a runtime option. Do not point it at production until the transferred records and workflows have been verified.
+
+To run the real-time chat integration test against a separate PostgreSQL test database, set `TEST_DATABASE_URL` to an isolated database account allowed to create and drop a temporary schema, then run `npm run test:chat`. The test is skipped when `TEST_DATABASE_URL` is absent.
 
 ### Google Maps setup
 
@@ -93,11 +113,11 @@ Create a production frontend bundle with `npm run build`. Set production environ
 
 ## Authentication setup
 
-Registration and password login create real accounts in SQLite. Passwords use scrypt hashes. Session tokens are random, stored hashed in SQLite, and sent as HttpOnly, SameSite cookies. Every account has one role; the rider and driver APIs enforce that role on the server.
+Registration and password login create real accounts in PostgreSQL. Passwords use scrypt hashes. Session tokens are random, stored hashed in PostgreSQL, and sent as HttpOnly, SameSite cookies. Every account has one role; the rider and driver APIs enforce that role on the server.
 
 For Google sign-in, create a Web OAuth client in Google Cloud Console, add `http://localhost:5173` as an Authorized JavaScript origin, then set both `VITE_GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_ID` in `.env` to that client ID. The API verifies the Google ID token before creating a session. Restart the dev server after changing environment values. A first-time Google sign-in from either portal's login page automatically creates an account with that portal's role; users don't need to register separately first.
 
-For production, set `NODE_ENV=production`, a random `SESSION_SECRET` of at least 32 characters, `APP_ORIGIN` to the deployed site origin, and `GOOGLE_CLIENT_ID`. Serve the app over HTTPS.
+For production, set `NODE_ENV=production`, a random `SESSION_SECRET` of at least 32 characters, `APP_ORIGIN` to the deployed site origin, `GOOGLE_CLIENT_ID`, and a PostgreSQL `DATABASE_URL` with TLS (`DATABASE_SSL=true` or `sslmode=require`). Serve the app over HTTPS.
 
 ## Structure
 
@@ -112,9 +132,10 @@ src/
   styles/       responsive styles and Tailwind import
 server/
   auth.mjs      password hashing, Google verification, and cookie sessions
-  database.mjs  SQLite schema and initialization
+  database.mjs  PostgreSQL pool, schema and initialization
+  migrate-sqlite-to-postgres.mjs  one-time SQLite backup and data transfer utility
   index.mjs     auth endpoints, validation, rate limits, and role checks
-data/           local SQLite database (created on first API start)
+data/           local SQLite source/backups for migration only; kept out of git
 ```
 
 The rider dashboard calculates real Google Maps driving routes and displays configurable sample fare estimates. Fare rates are in `src/lib/fares.ts`. Ride requests continue to use the existing backend contract; fares are estimates and are not stored or charged. Driver earnings and ride history remain sample UI.

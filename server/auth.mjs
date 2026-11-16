@@ -32,11 +32,11 @@ export async function verifyPassword(password, stored) {
   return actual.length === expected.length && timingSafeEqual(actual, expected)
 }
 
-export function setSessionCookie(res, userId) {
+export async function setSessionCookie(res, userId) {
   const token = randomBytes(32).toString('base64url')
   const expiresAt = Date.now() + SESSION_TTL_MS
-  db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(Date.now())
-  db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)')
+  await db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(Date.now())
+  await db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)')
     .run(hashToken(token), userId, expiresAt, new Date().toISOString())
   const attributes = [`${SESSION_COOKIE}=${token}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${SESSION_TTL_MS / 1000}`]
   if (isProduction) attributes.push('Secure')
@@ -49,20 +49,20 @@ export function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', attributes.join('; '))
 }
 
-export function readSessionUser(req) {
+export async function readSessionUser(req) {
   const cookieHeader = req.headers.cookie || ''
   const tokenCookie = cookieHeader.split(';').map(part => part.trim()).find(part => part.startsWith(`${SESSION_COOKIE}=`))
   const token = tokenCookie?.slice(SESSION_COOKIE.length + 1)
   if (!token) return null
-  return db.prepare(`SELECT users.* FROM sessions JOIN users ON users.id = sessions.user_id
+  return await db.prepare(`SELECT users.* FROM sessions JOIN users ON users.id = sessions.user_id
     WHERE sessions.token_hash = ? AND sessions.expires_at > ?`).get(hashToken(token), Date.now()) || null
 }
 
-export function destroySession(req) {
+export async function destroySession(req) {
   const cookieHeader = req.headers.cookie || ''
   const tokenCookie = cookieHeader.split(';').map(part => part.trim()).find(part => part.startsWith(`${SESSION_COOKIE}=`))
   const token = tokenCookie?.slice(SESSION_COOKIE.length + 1)
-  if (token) db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token))
+  if (token) await db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token))
 }
 
 export async function verifyGoogleCredential(credential) {

@@ -17,9 +17,9 @@ export const rooms = {
 
 export const hashShareToken = token => createHash('sha256').update(token).digest('hex')
 
-export function activeShare(token) {
+export async function activeShare(token) {
   const tokenHash = hashShareToken(token)
-  const link = db.prepare(`SELECT share.ride_id, share.rider_id, share.expires_at, rides.status
+  const link = await db.prepare(`SELECT share.ride_id, share.rider_id, share.expires_at, rides.status
     FROM ride_share_links AS share JOIN rides ON rides.id = share.ride_id
     WHERE share.token_hash = ? AND share.revoked_at IS NULL AND share.expires_at > ?`).get(tokenHash, Date.now())
   if (!link || !activeStatuses.includes(link.status)) return null
@@ -32,26 +32,29 @@ export function createRealtimeServer(httpServer, allowedOrigins) {
     serveClient: true,
   })
 
-  io.use((socket, next) => {
-    const shareToken = socket.handshake.auth?.shareToken
-    if (typeof shareToken === 'string') {
-      if (shareToken.length < 40 || shareToken.length > 100) return next(new Error('Shared trip link is invalid.'))
-      const share = activeShare(shareToken)
-      if (share) {
-        socket.data.share = share
-        return next()
+  io.use(async (socket, next) => {
+    try {
+      const shareToken = socket.handshake.auth?.shareToken
+      if (typeof shareToken === 'string') {
+        if (shareToken.length < 40 || shareToken.length > 100) return next(new Error('Shared trip link is invalid.'))
+        const share = await activeShare(shareToken)
+        if (share) {
+          socket.data.share = share
+          return next()
+        }
+        return next(new Error('Shared trip link has expired or was revoked.'))
       }
-      return next(new Error('Shared trip link has expired or was revoked.'))
-    }
-    const user = readSessionUser({ headers: socket.handshake.headers })
-    if (user) {
+      const user = await readSessionUser({ headers: socket.handshake.headers })
+      if (!user) return next(new Error('Authentication required.'))
       socket.data.user = user
       return next()
+    } catch (error) {
+      next(error)
     }
-    next(new Error('Authentication required.'))
   })
 
   io.on('connection', socket => {
+    void (async () => {
     const share = socket.data.share
     if (share) {
       socket.join(rooms.ride(share.ride_id))
@@ -61,19 +64,6 @@ export function createRealtimeServer(httpServer, allowedOrigins) {
 
     const user = socket.data.user
     socket.join(rooms.user(user.id))
-    const activeRideRows = user.role === 'rider'
-      ? db.prepare("SELECT id, rider_id, driver_id FROM rides WHERE rider_id = ? AND status IN ('accepted', 'driver_arriving', 'driver_arrived', 'in_progress')").all(user.id)
-      : db.prepare("SELECT id, rider_id, driver_id FROM rides WHERE driver_id = ? AND status IN ('accepted', 'driver_arriving', 'driver_arrived', 'in_progress')").all(user.id)
-    for (const ride of activeRideRows) {
-      socket.join(rooms.ride(ride.id))
-      const otherId = user.id === ride.rider_id ? ride.driver_id : ride.rider_id
-      io.to(rooms.user(otherId)).emit('chat:presence', { rideId: ride.id, userId: user.id, online: true })
-    }
-
-    if (user.role === 'driver') {
-      const status = db.prepare('SELECT is_online, updated_at FROM driver_locations WHERE driver_id = ?').get(user.id)
-      if (status?.is_online && status.updated_at > Date.now() - 45_000) socket.join(rooms.onlineDrivers)
-    }
 
     socket.on('chat:join', async (payload, acknowledge) => {
       const reply = typeof acknowledge === 'function' ? acknowledge : () => undefined
@@ -81,9 +71,9 @@ export function createRealtimeServer(httpServer, allowedOrigins) {
       const parsed = z.object({ rideId: chatRideIdSchema }).strict().safeParse(payload)
       if (!parsed.success) return reply({ ok: false, error: 'Invalid ride chat.' })
       try {
-        const { canSend } = getRideChatAccess(parsed.data.rideId, socket.data.user.id)
+        const { canSend } = await getRideChatAccess(parsed.data.rideId, socket.data.user.id)
         socket.join(rooms.chat(parsed.data.rideId))
-        const ride = db.prepare('SELECT rider_id, driver_id FROM rides WHERE id = ?').get(parsed.data.rideId)
+        const ride = await db.prepare('SELECT rider_id, driver_id FROM rides WHERE id = ?').get(parsed.data.rideId)
         const otherId = socket.data.user.id === ride.rider_id ? ride.driver_id : ride.rider_id
         const otherSockets = await io.in(rooms.user(otherId)).fetchSockets()
         reply({ ok: true, canSend, otherOnline: otherSockets.length > 0 })
@@ -97,7 +87,7 @@ export function createRealtimeServer(httpServer, allowedOrigins) {
       if (parsed.success) socket.leave(rooms.chat(parsed.data.rideId))
     })
 
-    socket.on('chat:send', (payload, acknowledge) => {
+    socket.on('chat:send', async (payload, acknowledge) => {
       const reply = typeof acknowledge === 'function' ? acknowledge : () => undefined
       if (!socket.data.user) return reply({ ok: false, error: 'Authentication required.' })
       const parsed = chatMessageSchema.safeParse(payload)
@@ -109,7 +99,7 @@ export function createRealtimeServer(httpServer, allowedOrigins) {
       socket.data.chatSentAt = [...recent, now]
 
       try {
-        const { message, recipientId } = createRideChatMessage(parsed.data, socket.data.user.id)
+        const { message, recipientId } = await createRideChatMessage(parsed.data, socket.data.user.id)
         io.to(rooms.user(recipientId)).emit('chat:message', message)
         reply({ ok: true, message })
       } catch (error) {
@@ -117,12 +107,12 @@ export function createRealtimeServer(httpServer, allowedOrigins) {
       }
     })
 
-    socket.on('chat:delivered', payload => {
+    socket.on('chat:delivered', async payload => {
       if (!socket.data.user) return
       const parsed = z.object({ rideId: chatRideIdSchema, messageId: z.string().uuid() }).strict().safeParse(payload)
       if (!parsed.success) return
       try {
-        const result = markRideChatDelivered(parsed.data.rideId, parsed.data.messageId, socket.data.user.id)
+        const result = await markRideChatDelivered(parsed.data.rideId, parsed.data.messageId, socket.data.user.id)
         if (result) io.to(rooms.user(result.message.senderId)).emit('chat:receipt', {
           rideId: parsed.data.rideId,
           messageIds: [parsed.data.messageId],
@@ -131,7 +121,7 @@ export function createRealtimeServer(httpServer, allowedOrigins) {
       } catch { /* A message receipt is best-effort; history remains persisted. */ }
     })
 
-    socket.on('chat:typing', payload => {
+    socket.on('chat:typing', async payload => {
       if (!socket.data.user) return
       const parsed = z.object({ rideId: chatRideIdSchema, typing: z.boolean() }).strict().safeParse(payload)
       if (!parsed.success) return
@@ -140,7 +130,7 @@ export function createRealtimeServer(httpServer, allowedOrigins) {
       if (recent.length >= 25) return
       socket.data.chatTypingAt = [...recent, now]
       try {
-        const access = getRideChatAccess(parsed.data.rideId, socket.data.user.id)
+        const access = await getRideChatAccess(parsed.data.rideId, socket.data.user.id)
         if (!access.canSend) return
         io.to(rooms.user(access.recipientId)).emit('chat:typing', {
           rideId: parsed.data.rideId,
@@ -154,12 +144,31 @@ export function createRealtimeServer(httpServer, allowedOrigins) {
       const remainingSockets = await io.in(rooms.user(user.id)).fetchSockets()
       if (remainingSockets.length) return
       const activeRideRows = user.role === 'rider'
-        ? db.prepare("SELECT id, rider_id, driver_id FROM rides WHERE rider_id = ? AND status IN ('accepted', 'driver_arriving', 'driver_arrived', 'in_progress')").all(user.id)
-        : db.prepare("SELECT id, rider_id, driver_id FROM rides WHERE driver_id = ? AND status IN ('accepted', 'driver_arriving', 'driver_arrived', 'in_progress')").all(user.id)
+        ? await db.prepare("SELECT id, rider_id, driver_id FROM rides WHERE rider_id = ? AND status IN ('accepted', 'driver_arriving', 'driver_arrived', 'in_progress')").all(user.id)
+        : await db.prepare("SELECT id, rider_id, driver_id FROM rides WHERE driver_id = ? AND status IN ('accepted', 'driver_arriving', 'driver_arrived', 'in_progress')").all(user.id)
       for (const ride of activeRideRows) {
         const otherId = user.id === ride.rider_id ? ride.driver_id : ride.rider_id
         io.to(rooms.user(otherId)).emit('chat:presence', { rideId: ride.id, userId: user.id, online: false })
       }
+    })
+
+    const activeRideRows = user.role === 'rider'
+      ? await db.prepare("SELECT id, rider_id, driver_id FROM rides WHERE rider_id = ? AND status IN ('accepted', 'driver_arriving', 'driver_arrived', 'in_progress')").all(user.id)
+      : await db.prepare("SELECT id, rider_id, driver_id FROM rides WHERE driver_id = ? AND status IN ('accepted', 'driver_arriving', 'driver_arrived', 'in_progress')").all(user.id)
+    if (socket.connected) {
+      for (const ride of activeRideRows) {
+        socket.join(rooms.ride(ride.id))
+        const otherId = user.id === ride.rider_id ? ride.driver_id : ride.rider_id
+        io.to(rooms.user(otherId)).emit('chat:presence', { rideId: ride.id, userId: user.id, online: true })
+      }
+      if (user.role === 'driver') {
+        const status = await db.prepare('SELECT is_online, updated_at FROM driver_locations WHERE driver_id = ?').get(user.id)
+        if (status?.is_online && status.updated_at > Date.now() - 45_000) socket.join(rooms.onlineDrivers)
+      }
+    }
+    })().catch(error => {
+      console.error('Socket connection setup failed:', error.message)
+      socket.disconnect(true)
     })
   })
 
