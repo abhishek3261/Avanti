@@ -1,10 +1,11 @@
 import { io, type Socket } from 'socket.io-client'
+import { apiBaseUrl } from './api'
 
 let socket: Socket | null = null
 let shareToken: string | null = null
 
 function ensureSocket(): Socket {
-  socket ??= io({ autoConnect: false, withCredentials: true })
+  socket ??= io(apiBaseUrl || window.location.origin, { autoConnect: false, withCredentials: true })
   return socket
 }
 

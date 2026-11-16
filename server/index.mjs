@@ -47,10 +47,21 @@ const configuredOrigins = (process.env.APP_ORIGIN || '')
   .split(',')
   .map(origin => origin.trim())
   .filter(Boolean)
+  .map(origin => {
+    let parsed
+    try { parsed = new URL(origin) } catch { throw new Error('APP_ORIGIN must contain comma-separated web origins, such as https://avanti.vercel.app.') }
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
+      throw new Error('APP_ORIGIN entries must be exact origins without paths, credentials, query strings, or fragments.')
+    }
+    if (isProduction && parsed.protocol !== 'https:') throw new Error('Production APP_ORIGIN entries must use HTTPS.')
+    return parsed.origin
+  })
+if (isProduction && configuredOrigins.length === 0) {
+  throw new Error('APP_ORIGIN is required in production. Set it to the exact HTTPS origin of the deployed frontend.')
+}
 const allowedOrigins = new Set([
   ...configuredOrigins,
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
+  ...(!isProduction ? ['http://localhost:5173', 'http://127.0.0.1:5173'] : []),
 ])
 const httpServer = createServer(app)
 const io = createRealtimeServer(httpServer, allowedOrigins)
@@ -58,8 +69,20 @@ const fareConfig = JSON.parse(readFileSync(new URL('../shared/fare-config.json',
 
 app.use('/api', (req, res, next) => {
   res.setHeader('Cache-Control', 'no-store')
+  const origin = req.get('origin')
+  if (origin) {
+    if (!allowedOrigins.has(origin)) return res.status(403).json({ error: 'Request origin is not allowed.' })
+    res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Access-Control-Allow-Credentials', 'true')
+    res.vary('Origin')
+  }
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS')
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+    res.setHeader('Access-Control-Max-Age', '600')
+    return res.sendStatus(204)
+  }
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
-    const origin = req.get('origin')
     if (!origin || !allowedOrigins.has(origin)) return res.status(403).json({ error: 'Request origin is not allowed.' })
   }
   next()
@@ -614,7 +637,7 @@ app.get('/api/health', async (_req, res) => {
 })
 app.use('/api', (_req, res) => res.status(404).json({ error: 'API route not found.' }))
 
-if (isProduction && existsSync(clientDist)) {
+if (isProduction && process.env.SERVE_FRONTEND !== 'false' && existsSync(clientDist)) {
   app.use(express.static(clientDist, { index: false, maxAge: '1h' }))
   app.get('*', (_req, res) => res.sendFile(resolve(clientDist, 'index.html')))
 }
@@ -632,10 +655,34 @@ try {
     expireRideRequests().catch(error => console.error('Background database maintenance failed:', error.message))
   }, 5_000)
   requestExpiryTimer.unref()
-  httpServer.listen(port, () => console.log(`Avanti API listening on port ${port}`))
+  httpServer.listen(port, '0.0.0.0', () => console.log(`Avanti API listening on port ${port}`))
 } catch (error) {
   if (requestExpiryTimer) clearInterval(requestExpiryTimer)
   console.error('Could not connect to PostgreSQL or initialize the schema:', error.message)
   process.exitCode = 1
   await db.close()
 }
+
+let isShuttingDown = false
+async function shutdown(signal) {
+  if (isShuttingDown) return
+  isShuttingDown = true
+  if (requestExpiryTimer) clearInterval(requestExpiryTimer)
+  console.log(`${signal} received; closing realtime connections and database pool.`)
+  const forcedExit = setTimeout(() => {
+    console.error('Graceful shutdown timed out.')
+    process.exit(1)
+  }, 25_000)
+  forcedExit.unref()
+  try {
+    await new Promise(resolveClose => io.close(resolveClose))
+    await db.close()
+    clearTimeout(forcedExit)
+  } catch (error) {
+    console.error('Error during graceful shutdown:', error?.message || error)
+    process.exitCode = 1
+  }
+}
+
+process.once('SIGTERM', () => { void shutdown('SIGTERM') })
+process.once('SIGINT', () => { void shutdown('SIGINT') })

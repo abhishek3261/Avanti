@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
+import { apiUrl } from '../lib/api'
 
 export type UserRole = 'rider' | 'driver'
 export type AuthUser = { id: string; email: string; name: string; phone: string | null; role: UserRole; createdAt: string }
@@ -15,7 +16,7 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | null>(null)
 
 async function request<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(apiUrl(path), {
     method: body === undefined ? 'GET' : 'POST',
     credentials: 'include',
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },

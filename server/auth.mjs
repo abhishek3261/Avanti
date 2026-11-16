@@ -10,6 +10,13 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 const hashToken = token => createHmac('sha256', process.env.SESSION_SECRET || 'avanti-development-session-key').update(token).digest('hex')
 const isProduction = process.env.NODE_ENV === 'production'
+const sessionCookieSameSite = (process.env.SESSION_COOKIE_SAME_SITE || 'lax').toLowerCase()
+if (!['lax', 'strict', 'none'].includes(sessionCookieSameSite)) {
+  throw new Error('SESSION_COOKIE_SAME_SITE must be lax, strict, or none.')
+}
+if (sessionCookieSameSite === 'none' && !isProduction) {
+  throw new Error('SESSION_COOKIE_SAME_SITE=none requires production HTTPS.')
+}
 
 export function publicUser(user) {
   return { id: user.id, email: user.email, name: user.name, phone: user.phone, role: user.role, createdAt: user.created_at }
@@ -38,13 +45,13 @@ export async function setSessionCookie(res, userId) {
   await db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(Date.now())
   await db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)')
     .run(hashToken(token), userId, expiresAt, new Date().toISOString())
-  const attributes = [`${SESSION_COOKIE}=${token}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${SESSION_TTL_MS / 1000}`]
+  const attributes = [`${SESSION_COOKIE}=${token}`, 'Path=/', 'HttpOnly', `SameSite=${sessionCookieSameSite}`, `Max-Age=${SESSION_TTL_MS / 1000}`]
   if (isProduction) attributes.push('Secure')
   res.setHeader('Set-Cookie', attributes.join('; '))
 }
 
 export function clearSessionCookie(res) {
-  const attributes = [`${SESSION_COOKIE}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0']
+  const attributes = [`${SESSION_COOKIE}=`, 'Path=/', 'HttpOnly', `SameSite=${sessionCookieSameSite}`, 'Max-Age=0']
   if (isProduction) attributes.push('Secure')
   res.setHeader('Set-Cookie', attributes.join('; '))
 }

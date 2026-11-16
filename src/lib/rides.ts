@@ -1,4 +1,5 @@
 import type { MapsPoint } from './googleMaps'
+import { apiUrl } from './api'
 
 export type RideStatus = 'requested' | 'accepted' | 'driver_arriving' | 'driver_arrived' | 'in_progress' | 'completed' | 'rejected' | 'cancelled'
 export type VehicleCategory = 'Mini' | 'Sedan' | 'SUV'
@@ -49,7 +50,7 @@ async function apiRequest<T>(path: string, method = 'GET', body?: unknown): Prom
   const timeout = window.setTimeout(() => controller.abort(), 20_000)
   let response: Response
   try {
-    response = await fetch(path, {
+    response = await fetch(apiUrl(path), {
       method,
       credentials: 'include',
       headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },

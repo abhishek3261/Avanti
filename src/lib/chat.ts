@@ -1,3 +1,5 @@
+import { apiUrl } from './api'
+
 export type ChatMessage = {
   id: string
   rideId: string
@@ -17,7 +19,7 @@ export type ChatSnapshot = {
 }
 
 async function chatRequest<T>(path: string, method = 'GET'): Promise<T> {
-  const response = await fetch(path, { method, credentials: 'include' })
+  const response = await fetch(apiUrl(path), { method, credentials: 'include' })
   const data = await response.json().catch(() => ({})) as { error?: string } & T
   if (!response.ok) throw new Error(data.error || 'Chat is temporarily unavailable.')
   return data
