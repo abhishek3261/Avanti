@@ -474,7 +474,9 @@ app.post('/api/rides/:id/:action', requireAuth, async (req, res) => {
 })
 
 app.get('/api/driver/profile', requireAuth, requireRole('driver'), async (req, res) => {
-  const profile = await db.prepare('SELECT vehicle_model AS vehicleModel, vehicle_color AS vehicleColor, vehicle_registration AS vehicleRegistration, rating, rating_count AS ratingCount FROM driver_profiles WHERE driver_id = ?').get(req.user.id) || null
+  // PostgreSQL folds unquoted identifiers to lowercase, so quote these API
+  // aliases to preserve the camelCase shape expected by the frontend.
+  const profile = await db.prepare('SELECT vehicle_model AS "vehicleModel", vehicle_color AS "vehicleColor", vehicle_registration AS "vehicleRegistration", rating, rating_count AS "ratingCount" FROM driver_profiles WHERE driver_id = ?').get(req.user.id) || null
   res.json({ profile })
 })
 
@@ -492,7 +494,7 @@ app.put('/api/driver/profile', requireAuth, requireRole('driver'), async (req, r
     if (error?.code === '23505') return res.status(409).json({ error: 'That vehicle registration is already connected to another driver profile.' })
     throw error
   }
-  res.json({ profile: await db.prepare('SELECT vehicle_model AS vehicleModel, vehicle_color AS vehicleColor, vehicle_registration AS vehicleRegistration, rating, rating_count AS ratingCount FROM driver_profiles WHERE driver_id = ?').get(req.user.id) })
+  res.json({ profile: await db.prepare('SELECT vehicle_model AS "vehicleModel", vehicle_color AS "vehicleColor", vehicle_registration AS "vehicleRegistration", rating, rating_count AS "ratingCount" FROM driver_profiles WHERE driver_id = ?').get(req.user.id) })
 })
 
 function parseLocation(body, res) {
