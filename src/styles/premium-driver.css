@@ -223,6 +223,20 @@
   background: var(--accent-strong);
 }
 
+.online-toggle > .driver-gps-refresh {
+  min-height: 36px;
+  margin-left: auto;
+  border: 1px solid #dce6d4;
+  color: #50694b;
+  background: #f2f7ec;
+  white-space: nowrap;
+}
+
+.online-toggle > .driver-gps-refresh:hover { background: #e8f1df; }
+.online-toggle.is-online > .driver-gps-refresh { color: #50694b; background: #f2f7ec; }
+.online-toggle.is-online > .driver-gps-refresh:hover { background: #e8f1df; }
+.online-toggle.is-online > button:last-child { margin-left: 0; }
+
 .online-toggle.is-online {
   border-color: #cbdcba;
   background: #fbfdf8;

@@ -437,6 +437,7 @@ export default function DriverDashboard() {
           <div><span className="eyebrow">AVANTI DRIVER</span><h1>Good roads, <em>{firstName}.</em></h1><p>Ride requests and your active trip appear here.</p></div>
           <div className={`online-toggle ${online ? 'is-online' : ''}`}>
             <div><span className="status-dot" /><b>{online ? 'You’re online' : 'You’re offline'}</b><small>{online ? 'Sharing GPS while this page is active' : 'Location is not being shared'}</small></div>
+            {online && <button className="driver-gps-refresh" disabled={presenceBusy} onClick={() => void setOnlineWithGps()} aria-label="Refresh GPS location"><Navigation size={15} /><span>{presenceBusy ? 'Refreshing…' : 'Refresh GPS'}</span></button>}
             <button disabled={presenceBusy} onClick={() => online ? void setOffline() : void setOnlineWithGps()} aria-label={online ? 'Go offline' : 'Go online'}><Power size={17} /><span>{presenceBusy ? (online ? 'Going offline…' : 'Connecting…') : online ? 'Go offline' : 'Go online'}</span></button>
           </div>
         </div>
