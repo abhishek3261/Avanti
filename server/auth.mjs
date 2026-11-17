@@ -10,9 +10,15 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 const hashToken = token => createHmac('sha256', process.env.SESSION_SECRET || 'avanti-development-session-key').update(token).digest('hex')
 const isProduction = process.env.NODE_ENV === 'production'
-const sessionCookieSameSite = (process.env.SESSION_COOKIE_SAME_SITE || 'lax').toLowerCase()
-if (!['lax', 'strict', 'none'].includes(sessionCookieSameSite)) {
-  throw new Error('SESSION_COOKIE_SAME_SITE must be lax, strict, or none.')
+// Vercel and Render use different site domains, so production API requests
+// need a cross-site cookie. Local development remains same-site and uses lax.
+const configuredSameSite = (process.env.SESSION_COOKIE_SAME_SITE || '').trim().toLowerCase()
+const validSameSiteValues = ['lax', 'strict', 'none']
+const sessionCookieSameSite = validSameSiteValues.includes(configuredSameSite)
+  ? configuredSameSite
+  : isProduction ? 'none' : 'lax'
+if (configuredSameSite && !validSameSiteValues.includes(configuredSameSite)) {
+  console.warn('Invalid SESSION_COOKIE_SAME_SITE; using the environment default.')
 }
 if (sessionCookieSameSite === 'none' && !isProduction) {
   throw new Error('SESSION_COOKIE_SAME_SITE=none requires production HTTPS.')

@@ -65,7 +65,7 @@ async function apiRequest<T>(path: string, method = 'GET', body?: unknown): Prom
   }
   if (response.status === 204) return undefined as T
   const data = await response.json().catch(() => ({})) as { error?: string } & T
-  if (!response.ok) throw new Error(data.error || 'Unable to update the ride. Please try again.')
+  if (!response.ok) throw new Error(`${data.error || 'Unable to update the ride. Please try again.'} (HTTP ${response.status})`)
   return data
 }
 

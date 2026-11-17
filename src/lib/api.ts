@@ -1,6 +1,10 @@
 const rawApiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').trim()
 let configuredApiBaseUrl = ''
 
+if (import.meta.env.PROD && !rawApiBaseUrl) {
+  throw new Error('VITE_API_BASE_URL is required in production. Set it to the Render API origin, such as https://avanti-sr41.onrender.com, then redeploy Vercel.')
+}
+
 if (rawApiBaseUrl) {
   let parsedApiBaseUrl: URL
   try { parsedApiBaseUrl = new URL(rawApiBaseUrl) } catch {
