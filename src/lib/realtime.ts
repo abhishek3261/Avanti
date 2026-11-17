@@ -1,11 +1,25 @@
 import { io, type Socket } from 'socket.io-client'
-import { apiBaseUrl } from './api'
+import { apiUrl, realtimeBaseUrl } from './api'
 
 let socket: Socket | null = null
 let shareToken: string | null = null
 
+function sessionSocketAuth(callback: (auth: Record<string, string>) => void) {
+  void fetch(apiUrl('/api/realtime-token'), { credentials: 'include', cache: 'no-store' })
+    .then(async response => {
+      const result = await response.json().catch(() => ({})) as { token?: string; error?: string }
+      if (!response.ok || !result.token) throw new Error(result.error || 'Sign in again to connect live updates.')
+      callback({ realtimeTicket: result.token })
+    })
+    .catch(() => callback({}))
+}
+
 function ensureSocket(): Socket {
-  socket ??= io(apiBaseUrl || window.location.origin, { autoConnect: false, withCredentials: true })
+  socket ??= io(realtimeBaseUrl || window.location.origin, {
+    autoConnect: false,
+    withCredentials: false,
+    auth: sessionSocketAuth,
+  })
   return socket
 }
 
@@ -14,7 +28,7 @@ export function getSessionRealtimeSocket(): Socket {
   const active = ensureSocket()
   if (shareToken) {
     active.disconnect()
-    active.auth = {}
+    active.auth = sessionSocketAuth
     shareToken = null
   }
   return active

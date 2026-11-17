@@ -1,8 +1,8 @@
 // Production routes through the same-origin Vercel proxy so browser session
 // cookies remain first-party. Local development may still target an explicit
 // API origin, or leave this blank to use Vite's local proxy.
-const rawApiBaseUrl = import.meta.env.PROD ? '' : (import.meta.env.VITE_API_BASE_URL ?? '').trim()
-let configuredApiBaseUrl = ''
+const rawApiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').trim()
+let validatedApiBaseUrl = ''
 
 if (rawApiBaseUrl) {
   let parsedApiBaseUrl: URL
@@ -16,8 +16,13 @@ if (rawApiBaseUrl) {
   if (import.meta.env.PROD && parsedApiBaseUrl.protocol !== 'https:') {
     throw new Error('VITE_API_BASE_URL must use HTTPS in production.')
   }
-  configuredApiBaseUrl = parsedApiBaseUrl.origin
+  validatedApiBaseUrl = parsedApiBaseUrl.origin
 }
+
+// REST stays same-origin in production for first-party session cookies. The
+// Socket.IO client uses the configured Render origin directly to avoid trying
+// to tunnel a long-lived WebSocket through Vercel's external rewrite.
+const configuredApiBaseUrl = import.meta.env.PROD ? '' : validatedApiBaseUrl
 
 /**
  * Resolves API paths against the optional production API origin.
@@ -29,3 +34,4 @@ export function apiUrl(path: string): string {
 }
 
 export const apiBaseUrl = configuredApiBaseUrl
+export const realtimeBaseUrl = validatedApiBaseUrl

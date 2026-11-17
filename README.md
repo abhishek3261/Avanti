@@ -107,7 +107,7 @@ Create a production frontend bundle with `npm run build`. Set production environ
 
 The project uses PostgreSQL at runtime already. The SQLite dependency is retained only as a development dependency for the one-time SQLite-to-PostgreSQL transfer utility; the production API does not open SQLite. Do not rerun the transfer utility against the existing Neon database.
 
-The Vercel frontend proxies `/api/*` and `/socket.io/*` through its own domain to Render. This keeps the browser session first-party on iPhone and other browsers that restrict cross-site cookies. Production builds use these same-origin paths even if `VITE_API_BASE_URL` remains configured; remove that old Vercel variable to avoid confusion. Locally, leave it empty so Vite proxies those paths to `localhost:4000`.
+The Vercel frontend proxies `/api/*` through its own domain to Render so browser session cookies remain first-party on iPhone. Socket.IO connects directly to Render, because long-lived WebSocket connections should not be sent through Vercel's external rewrite. The browser obtains a short-lived signed socket ticket through the authenticated same-origin API; the Render WebSocket does not depend on a cross-site session cookie. Locally, leave `VITE_API_BASE_URL` empty so Vite proxies REST and Socket.IO to `localhost:4000`.
 
 ### 1. Deploy the API on Render
 
@@ -143,7 +143,7 @@ Add these Vercel **Production** environment variables:
 
 | Name | Value |
 | --- | --- |
-| `VITE_API_BASE_URL` | Not used in production; remove the old Vercel value. Vercel proxies API and Socket.IO paths to Render |
+| `VITE_API_BASE_URL` | `https://avanti-sr41.onrender.com` (public backend origin used for direct Socket.IO; REST continues through Vercel's same-origin `/api` rewrite) |
 | `VITE_GOOGLE_CLIENT_ID` | The same Google Web OAuth client ID configured on Render |
 | `VITE_GOOGLE_MAPS_API_KEY` | Browser Maps key restricted by website referrer and required Maps APIs |
 | `VITE_GOOGLE_MAPS_MAP_ID` | Optional map ID if configured |
@@ -157,7 +157,7 @@ For the OAuth Web client, add the exact Vercel production origin (for example, `
 ### 5. Verify the deployment
 
 1. Open `https://<render-service>.onrender.com/api/health`; expect HTTP 200 and `database: "connected"`.
-2. Open the Vercel production URL and check the browser Network tab: `/api/...` requests and `/socket.io` connections must go to the Render hostname.
+2. Open the Vercel production URL and check the browser Network tab: `/api/...` requests should stay on the Vercel hostname, while the Socket.IO WebSocket should connect to `wss://avanti-sr41.onrender.com/socket.io/`.
 3. Test rider and driver password login, Google login, ride creation and acceptance, location updates, chat, and a direct page refresh on a nested route.
 4. If requests fail with a CORS error, confirm the browser's exact `https://...vercel.app` origin is in Render's `APP_ORIGIN`. If login succeeds but the next request is unauthenticated, check the cookie's `SameSite` setting and browser third-party-cookie policy.
 

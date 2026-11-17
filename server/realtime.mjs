@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { Server } from 'socket.io'
 import { z } from 'zod'
 import { db } from './database.mjs'
-import { readSessionUser } from './auth.mjs'
+import { readSessionUser, verifyRealtimeTicket } from './auth.mjs'
 import { chatMessageSchema, chatRideIdSchema, createRideChatMessage, getRideChatAccess, markRideChatDelivered } from './chat.mjs'
 
 const activeStatuses = ['accepted', 'driver_arriving', 'driver_arrived', 'in_progress']
@@ -43,6 +43,13 @@ export function createRealtimeServer(httpServer, allowedOrigins) {
           return next()
         }
         return next(new Error('Shared trip link has expired or was revoked.'))
+      }
+      const realtimeTicket = socket.handshake.auth?.realtimeTicket
+      if (typeof realtimeTicket === 'string') {
+        const ticketUser = await verifyRealtimeTicket(realtimeTicket)
+        if (!ticketUser) return next(new Error('Live connection expired. Reconnecting.'))
+        socket.data.user = ticketUser
+        return next()
       }
       const user = await readSessionUser({ headers: socket.handshake.headers })
       if (!user) return next(new Error('Authentication required.'))

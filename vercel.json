@@ -9,10 +9,6 @@
       "destination": "https://avanti-sr41.onrender.com/api/:path*"
     },
     {
-      "source": "/socket.io/:path*",
-      "destination": "https://avanti-sr41.onrender.com/socket.io/:path*"
-    },
-    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

@@ -10,7 +10,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { db, initializeDatabase } from './database.mjs'
-import { clearSessionCookie, destroySession, hashPassword, newUserId, publicUser, readSessionUser, setSessionCookie, verifyGoogleCredential, verifyPassword } from './auth.mjs'
+import { clearSessionCookie, createRealtimeTicket, destroySession, hashPassword, newUserId, publicUser, readSessionUser, setSessionCookie, verifyGoogleCredential, verifyPassword } from './auth.mjs'
 import { createRealtimeServer, hashShareToken, rooms } from './realtime.mjs'
 import { chatMessageSchema, chatRideIdSchema, createRideChatMessage, getRideChat, markRideChatRead } from './chat.mjs'
 
@@ -219,6 +219,14 @@ app.post('/api/auth/google', authLimiter, async (req, res, next) => {
 })
 
 app.get('/api/auth/me', requireAuth, (req, res) => res.json({ user: publicUser(req.user) }))
+
+app.get('/api/realtime-token', requireAuth, async (req, res) => {
+  try {
+    return res.json({ token: await createRealtimeTicket(req, req.user) })
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error instanceof Error ? error.message : 'Could not authorize live connection.' })
+  }
+})
 
 app.post('/api/auth/logout', requireAuth, async (req, res) => {
   await destroySession(req)

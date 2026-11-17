@@ -7,8 +7,10 @@ const scrypt = promisify(scryptCallback)
 const googleClient = new OAuth2Client()
 const SESSION_COOKIE = 'avanti_session'
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const REALTIME_TICKET_TTL_MS = 2 * 60 * 1000
 
 const hashToken = token => createHmac('sha256', process.env.SESSION_SECRET || 'avanti-development-session-key').update(token).digest('hex')
+const signRealtimePayload = payload => createHmac('sha256', process.env.SESSION_SECRET || 'avanti-development-session-key').update(payload).digest('base64url')
 const isProduction = process.env.NODE_ENV === 'production'
 // Vercel and Render use different site domains, so production API requests
 // need a cross-site cookie. Local development remains same-site and uses lax.
@@ -69,6 +71,34 @@ export async function readSessionUser(req) {
   if (!token) return null
   return await db.prepare(`SELECT users.* FROM sessions JOIN users ON users.id = sessions.user_id
     WHERE sessions.token_hash = ? AND sessions.expires_at > ?`).get(hashToken(token), Date.now()) || null
+}
+
+export async function createRealtimeTicket(req, user) {
+  const cookieHeader = req.headers.cookie || ''
+  const tokenCookie = cookieHeader.split(';').map(part => part.trim()).find(part => part.startsWith(`${SESSION_COOKIE}=`))
+  const sessionToken = tokenCookie?.slice(SESSION_COOKIE.length + 1)
+  if (!sessionToken) throw Object.assign(new Error('Sign in again to connect live chat.'), { status: 401 })
+  const payload = Buffer.from(JSON.stringify({
+    sub: user.id,
+    sessionHash: hashToken(sessionToken),
+    exp: Date.now() + REALTIME_TICKET_TTL_MS,
+  })).toString('base64url')
+  return `${payload}.${signRealtimePayload(payload)}`
+}
+
+export async function verifyRealtimeTicket(ticket) {
+  if (typeof ticket !== 'string' || ticket.length > 2_048) return null
+  const [payload, signature, extra] = ticket.split('.')
+  if (!payload || !signature || extra !== undefined) return null
+  const expected = Buffer.from(signRealtimePayload(payload))
+  const supplied = Buffer.from(signature)
+  if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) return null
+  let claims
+  try { claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) } catch { return null }
+  if (typeof claims.sub !== 'string' || typeof claims.sessionHash !== 'string'
+    || !Number.isFinite(claims.exp) || claims.exp <= Date.now() || claims.exp > Date.now() + REALTIME_TICKET_TTL_MS + 5_000) return null
+  return await db.prepare(`SELECT users.* FROM sessions JOIN users ON users.id = sessions.user_id
+    WHERE sessions.token_hash = ? AND sessions.user_id = ? AND sessions.expires_at > ?`).get(claims.sessionHash, claims.sub, Date.now()) || null
 }
 
 export async function destroySession(req) {
