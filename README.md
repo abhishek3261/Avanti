@@ -107,7 +107,7 @@ Create a production frontend bundle with `npm run build`. Set production environ
 
 The project uses PostgreSQL at runtime already. The SQLite dependency is retained only as a development dependency for the one-time SQLite-to-PostgreSQL transfer utility; the production API does not open SQLite. Do not rerun the transfer utility against the existing Neon database.
 
-The Vercel frontend and Render API use separate origins. The frontend reads `VITE_API_BASE_URL` for HTTP and Socket.IO requests. Leave it empty locally so the existing Vite `/api` and `/socket.io` proxy continues to work.
+The Vercel frontend proxies `/api/*` and `/socket.io/*` through its own domain to Render. This keeps the browser session first-party on iPhone and other browsers that restrict cross-site cookies. Production builds use these same-origin paths even if `VITE_API_BASE_URL` remains configured; remove that old Vercel variable to avoid confusion. Locally, leave it empty so Vite proxies those paths to `localhost:4000`.
 
 ### 1. Deploy the API on Render
 
@@ -124,14 +124,14 @@ Add these variables under the Render service's **Environment** settings:
 | `APP_ORIGIN` | Exact frontend HTTPS origin, e.g. `https://avanti.vercel.app`, with no path or trailing slash |
 | `TRUST_PROXY` | `1` for the Render web service proxy |
 | `SERVE_FRONTEND` | `false` because Vercel serves the frontend |
-| `SESSION_COOKIE_SAME_SITE` | Choose `lax` or `none` as explained below |
+| `SESSION_COOKIE_SAME_SITE` | `lax` (recommended with the Vercel same-origin proxy) |
 | `DATABASE_POOL_MAX` | Optional; defaults to `10` |
 
 Do not set `PORT` manually. Keep `DATABASE_URL`, `SESSION_SECRET`, and any other server credentials on Render only. The API's `/api/health` endpoint checks database connectivity and is suitable for Render's health check. Render supports public WebSocket connections, which the existing Socket.IO server uses for live updates and chat. [Render Web Services](https://render.com/docs/web-services), [Render WebSockets](https://render.com/docs/websocket), [Render health checks](https://render.com/docs/health-checks)
 
 ### 2. Choose the session-cookie domain arrangement
 
-The cookie remains `HttpOnly` and `Secure` in production. For the default separate provider domains (`*.vercel.app` and `*.onrender.com`), set `SESSION_COOKIE_SAME_SITE=none`; browsers require `SameSite=None; Secure` for cross-site credentialed cookies. Some browsers, especially with strict privacy settings, may still block third-party cookies.
+The cookie remains `HttpOnly` and `Secure` in production. With the Vercel same-origin proxy, set `SESSION_COOKIE_SAME_SITE=lax`; browsers no longer need to send the cookie directly from the Vercel site to the unrelated Render domain.
 
 For more reliable browser authentication, use custom HTTPS domains under the same registrable domain, such as `app.example.com` on Vercel and `api.example.com` on Render, then set `SESSION_COOKIE_SAME_SITE=lax`. The API still uses credentialed CORS because these are different origins, even though they are same-site. Set `APP_ORIGIN` to the exact app origin. Do not use wildcard origins. If you want Vercel Preview deployments to call the API, add each stable preview origin explicitly to `APP_ORIGIN`; arbitrary Vercel preview URLs are not accepted.
 
@@ -143,7 +143,7 @@ Add these Vercel **Production** environment variables:
 
 | Name | Value |
 | --- | --- |
-| `VITE_API_BASE_URL` | Render service origin, e.g. `https://avanti-api.onrender.com`, without a trailing slash |
+| `VITE_API_BASE_URL` | Not used in production; remove the old Vercel value. Vercel proxies API and Socket.IO paths to Render |
 | `VITE_GOOGLE_CLIENT_ID` | The same Google Web OAuth client ID configured on Render |
 | `VITE_GOOGLE_MAPS_API_KEY` | Browser Maps key restricted by website referrer and required Maps APIs |
 | `VITE_GOOGLE_MAPS_MAP_ID` | Optional map ID if configured |

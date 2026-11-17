@@ -1,9 +1,8 @@
-const rawApiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').trim()
+// Production routes through the same-origin Vercel proxy so browser session
+// cookies remain first-party. Local development may still target an explicit
+// API origin, or leave this blank to use Vite's local proxy.
+const rawApiBaseUrl = import.meta.env.PROD ? '' : (import.meta.env.VITE_API_BASE_URL ?? '').trim()
 let configuredApiBaseUrl = ''
-
-if (import.meta.env.PROD && !rawApiBaseUrl) {
-  throw new Error('VITE_API_BASE_URL is required in production. Set it to the Render API origin, such as https://avanti-sr41.onrender.com, then redeploy Vercel.')
-}
 
 if (rawApiBaseUrl) {
   let parsedApiBaseUrl: URL
