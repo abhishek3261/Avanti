@@ -66,6 +66,10 @@ function fromPosition(position: GeolocationPosition) {
   }
 }
 
+function needsDriverPresenceReconnect(error: unknown) {
+  return error instanceof Error && error.message.startsWith('Go online before sending driver location.')
+}
+
 function statusLabel(status: Ride['status']) {
   return ({
     requested: 'New request', accepted: 'Ride accepted', driver_arriving: 'Heading to pickup',
@@ -319,7 +323,7 @@ export default function DriverDashboard() {
             lastSentRef.current = { time: Date.now(), point }
             setGpsError('')
           } catch (error) {
-            if (trackingActiveRef.current && error instanceof Error && error.message === 'Go online before sending driver location.') {
+            if (trackingActiveRef.current && needsDriverPresenceReconnect(error)) {
               try {
                 const restored = await driverGoOnline(next)
                 setLocation(restored)
@@ -351,7 +355,7 @@ export default function DriverDashboard() {
               setGpsError('')
             } catch (error) {
               if (!trackingActiveRef.current) return
-              if (error instanceof Error && error.message === 'Go online before sending driver location.') {
+              if (needsDriverPresenceReconnect(error)) {
                 try {
                   const restored = await driverGoOnline(fresh)
                   if (!trackingActiveRef.current) return
@@ -455,7 +459,10 @@ export default function DriverDashboard() {
           <article className="metric-card"><div className="metric-label">GPS UPDATE <span className="metric-icon peach"><MapPin size={17} /></span></div><strong>{location ? `${Math.round(location.accuracyMeters || 0)} m` : 'Waiting'}</strong><small>{location ? `Updated ${new Date(location.updatedAt).toLocaleTimeString()}` : 'No location received yet'}</small></article>
         </section>
 
-        {(gpsError || gpsMessage) && <p className={`driver-location-message ${gpsError ? 'is-error' : ''}`} role={gpsError ? 'alert' : 'status'}>{gpsError || gpsMessage}</p>}
+        {(gpsError || gpsMessage) && <div className={`driver-location-message ${gpsError ? 'is-error' : ''}`} role={gpsError ? 'alert' : 'status'}>
+          <span>{gpsError || gpsMessage}</span>
+          {gpsError && needsDriverPresenceReconnect(new Error(gpsError)) && <button type="button" className="driver-gps-retry" disabled={presenceBusy} onClick={() => void setOnlineWithGps()}>{presenceBusy ? 'Reconnecting…' : 'Reconnect GPS'}</button>}
+        </div>}
         {rideError && <p className="ride-error" role="alert">{rideError}</p>}
 
         <div className="driver-work-grid">
