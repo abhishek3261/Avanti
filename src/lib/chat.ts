@@ -25,6 +25,18 @@ async function chatRequest<T>(path: string, method = 'GET'): Promise<T> {
   return data
 }
 
+export async function sendRideChatMessage(rideId: string, clientMessageId: string, body: string): Promise<ChatMessage> {
+  const response = await fetch(apiUrl(`/api/rides/${encodeURIComponent(rideId)}/chat`), {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rideId, clientMessageId, body }),
+  })
+  const data = await response.json().catch(() => ({})) as { error?: string; message?: ChatMessage }
+  if (!response.ok || !data.message) throw new Error(data.error || 'Chat is temporarily unavailable.')
+  return data.message
+}
+
 export function getRideChat(rideId: string): Promise<ChatSnapshot> {
   return chatRequest(`/api/rides/${encodeURIComponent(rideId)}/chat`)
 }

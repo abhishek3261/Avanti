@@ -9,13 +9,19 @@ function ensureSocket(): Socket {
   return socket
 }
 
-export function connectSessionRealtime(): Socket {
+/** Return the session socket without connecting so consumers can attach listeners first. */
+export function getSessionRealtimeSocket(): Socket {
   const active = ensureSocket()
   if (shareToken) {
     active.disconnect()
     active.auth = {}
     shareToken = null
   }
+  return active
+}
+
+export function connectSessionRealtime(): Socket {
+  const active = getSessionRealtimeSocket()
   if (!active.connected) active.connect()
   return active
 }

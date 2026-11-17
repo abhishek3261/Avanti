@@ -76,7 +76,11 @@ export function createRealtimeServer(httpServer, allowedOrigins) {
         const ride = await db.prepare('SELECT rider_id, driver_id FROM rides WHERE id = ?').get(parsed.data.rideId)
         const otherId = socket.data.user.id === ride.rider_id ? ride.driver_id : ride.rider_id
         const otherSockets = await io.in(rooms.user(otherId)).fetchSockets()
-        reply({ ok: true, canSend, otherOnline: otherSockets.length > 0 })
+        const driverPresence = otherId === ride.driver_id
+          ? await db.prepare('SELECT is_online, updated_at FROM driver_locations WHERE driver_id = ?').get(otherId)
+          : null
+        const driverGpsIsFresh = Boolean(driverPresence?.is_online && driverPresence.updated_at > Date.now() - 45_000)
+        reply({ ok: true, canSend, otherOnline: otherSockets.length > 0 || driverGpsIsFresh })
       } catch (error) {
         reply({ ok: false, error: error instanceof Error ? error.message : 'You cannot access this chat.' })
       }
@@ -142,7 +146,12 @@ export function createRealtimeServer(httpServer, allowedOrigins) {
 
     socket.on('disconnect', async () => {
       const remainingSockets = await io.in(rooms.user(user.id)).fetchSockets()
-      if (remainingSockets.length) return
+      const driverPresence = user.role === 'driver'
+        ? await db.prepare('SELECT is_online, updated_at FROM driver_locations WHERE driver_id = ?').get(user.id)
+        : null
+      const stillAvailable = remainingSockets.length > 0
+        || Boolean(driverPresence?.is_online && driverPresence.updated_at > Date.now() - 45_000)
+      if (stillAvailable) return
       const activeRideRows = user.role === 'rider'
         ? await db.prepare("SELECT id, rider_id, driver_id FROM rides WHERE rider_id = ? AND status IN ('accepted', 'driver_arriving', 'driver_arrived', 'in_progress')").all(user.id)
         : await db.prepare("SELECT id, rider_id, driver_id FROM rides WHERE driver_id = ? AND status IN ('accepted', 'driver_arriving', 'driver_arrived', 'in_progress')").all(user.id)

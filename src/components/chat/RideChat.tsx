@@ -5,8 +5,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useAuth } from '../../context/AuthContext'
-import { getRideChat, markRideChatRead, type ChatMessage, type ChatSnapshot } from '../../lib/chat'
-import { connectSessionRealtime } from '../../lib/realtime'
+import { getRideChat, markRideChatRead, sendRideChatMessage, type ChatMessage, type ChatSnapshot } from '../../lib/chat'
+import { getSessionRealtimeSocket } from '../../lib/realtime'
 import type { RideStatus } from '../../lib/rides'
 
 type LocalMessage = ChatMessage & { deliveryState?: 'sending' | 'failed' | 'sent' }
@@ -49,13 +49,14 @@ export default function RideChat({ rideId, rideStatus, otherPartyName, otherPart
   const [messages, setMessages] = useState<LocalMessage[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
   const [otherOnline, setOtherOnline] = useState(false)
+  const [socketConnected, setSocketConnected] = useState(false)
   const [loading, setLoading] = useState(false)
   const [canSendFromServer, setCanSendFromServer] = useState(true)
   const [draft, setDraft] = useState('')
   const [error, setError] = useState('')
   const [peerTyping, setPeerTyping] = useState(false)
   const [notice, setNotice] = useState('')
-  const socketRef = useRef<ReturnType<typeof connectSessionRealtime> | null>(null)
+  const socketRef = useRef<ReturnType<typeof getSessionRealtimeSocket> | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const openRef = useRef(false)
@@ -132,8 +133,9 @@ export default function RideChat({ rideId, rideStatus, otherPartyName, otherPart
   }, [loadHistory, markViewedMessagesRead, rideId, rideStatus])
 
   useEffect(() => {
-    const socket = connectSessionRealtime()
+    const socket = getSessionRealtimeSocket()
     socketRef.current = socket
+    setSocketConnected(socket.connected)
     const onMessage = (message: ChatMessage) => {
       if (message.rideId !== rideId || seenIdsRef.current.has(message.id)) return
       seenIdsRef.current.add(message.id)
@@ -172,8 +174,17 @@ export default function RideChat({ rideId, rideStatus, otherPartyName, otherPart
       if (event.rideId === rideId && event.userId !== user?.id) setOtherOnline(event.online)
     }
     const onConnect = () => {
+      setSocketConnected(true)
       if (openRef.current && activeRideStatuses.includes(rideStatus)) joinConversation()
       else void loadHistory()
+    }
+    const onDisconnect = () => {
+      setSocketConnected(false)
+      setOtherOnline(false)
+    }
+    const onConnectError = (cause: Error) => {
+      setSocketConnected(false)
+      setError(`Live chat reconnecting: ${cause.message}`)
     }
 
     socket.on('chat:message', onMessage)
@@ -182,7 +193,10 @@ export default function RideChat({ rideId, rideStatus, otherPartyName, otherPart
     socket.on('chat:ended', onEnded)
     socket.on('chat:presence', onPresence)
     socket.on('connect', onConnect)
+    socket.on('disconnect', onDisconnect)
+    socket.on('connect_error', onConnectError)
     void loadHistory()
+    if (!socket.connected) socket.connect()
     return () => {
       socket.off('chat:message', onMessage)
       socket.off('chat:receipt', onReceipt)
@@ -190,6 +204,8 @@ export default function RideChat({ rideId, rideStatus, otherPartyName, otherPart
       socket.off('chat:ended', onEnded)
       socket.off('chat:presence', onPresence)
       socket.off('connect', onConnect)
+      socket.off('disconnect', onDisconnect)
+      socket.off('connect_error', onConnectError)
       socket.emit('chat:leave', { rideId })
       socketRef.current = null
       if (typingTimerRef.current !== null) window.clearTimeout(typingTimerRef.current)
@@ -224,10 +240,7 @@ export default function RideChat({ rideId, rideStatus, otherPartyName, otherPart
   const sendMessage = (text: string, retry?: LocalMessage) => {
     const body = text.trim()
     const socket = socketRef.current
-    if (!body || !canSendRef.current || !socket?.connected) {
-      if (!socket?.connected) setError('Chat is reconnecting. Please try sending again when connected.')
-      return
-    }
+    if (!body || !canSendRef.current) return
     const clientMessageId = retry?.clientMessageId || crypto.randomUUID()
     const optimistic: LocalMessage = retry
       ? { ...retry, deliveryState: 'sending' }
@@ -246,13 +259,34 @@ export default function RideChat({ rideId, rideStatus, otherPartyName, otherPart
     upsertMessage(optimistic)
     setError('')
     if (!retry) setDraft('')
+    const deliverOverHttp = () => {
+      void sendRideChatMessage(rideId, clientMessageId, body)
+        .then(message => {
+          setError('')
+          upsertMessage({ ...message, deliveryState: 'sent' })
+        })
+        .catch(cause => {
+          setMessages(current => current.map(message => message.clientMessageId === clientMessageId
+            ? { ...message, deliveryState: 'failed' }
+            : message))
+          setError(cause instanceof Error ? cause.message : 'Message could not be sent. Please retry.')
+        })
+    }
+    if (!socket?.connected) {
+      setError('Live chat is reconnecting. Sending this message securely over HTTPS.')
+      deliverOverHttp()
+      return
+    }
     socket.emit('chat:typing', { rideId, typing: false })
     socket.timeout(8_000).emit('chat:send', { rideId, clientMessageId, body }, (timeoutError: Error | null, result: SendAck) => {
-      if (timeoutError || !result?.ok || !result.message) {
-        setMessages(current => current.map(message => message.clientMessageId === clientMessageId
-          ? { ...message, deliveryState: 'failed' }
-          : message))
-        setError(result?.error || 'Message not delivered. Check your connection and retry.')
+      if (timeoutError) {
+        setError('Live chat was interrupted. Retrying this message securely over HTTPS.')
+        deliverOverHttp()
+        return
+      }
+      if (!result?.ok || !result.message) {
+        setError(result?.error ? `${result.error} Retrying over HTTPS.` : 'Live chat rejected the message. Retrying over HTTPS.')
+        deliverOverHttp()
         return
       }
       upsertMessage({ ...result.message, deliveryState: 'sent' })
@@ -298,7 +332,7 @@ export default function RideChat({ rideId, rideStatus, otherPartyName, otherPart
             <span className="ride-chat-avatar">{initials}</span>
             <span className="ride-chat-person-copy"><b>{otherPartyName}</b><small>{otherPartyDetail} · {statusText(rideStatus)}</small></span>
           </div>
-          <div className="ride-chat-header-actions"><span className={`ride-chat-state ${canSend && otherOnline ? 'is-active' : ''}`}><i />{canSend ? otherOnline ? 'Online' : 'Offline' : 'Read only'}</span><button type="button" className="ride-chat-close" aria-label="Close chat" onClick={() => setOpen(false)}><X size={18} /></button></div>
+          <div className="ride-chat-header-actions"><span className={`ride-chat-state ${canSend && socketConnected && otherOnline ? 'is-active' : ''}`}><i />{canSend ? !socketConnected ? 'Reconnecting' : otherOnline ? 'Online' : 'Offline' : 'Read only'}</span><button type="button" className="ride-chat-close" aria-label="Close chat" onClick={() => setOpen(false)}><X size={18} /></button></div>
         </header>
         <div className="ride-chat-ride-note"><BadgeCheck size={14} /><span>Private conversation for this ride</span></div>
         <div className="ride-chat-messages" role="log" aria-live="polite" aria-relevant="additions text" aria-label="Messages">
